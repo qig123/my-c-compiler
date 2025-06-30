@@ -60,7 +60,7 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     );
     let source_code = fs::read_to_string(&preprocessed_path)?;
 
-    // 2. STAGE 2: LEXING (现在是固定步骤)
+    // 2. STAGE 2: LEXING
     println!("\n2. Lexing source code...");
     let lexer = lexer::Lexer::new(&source_code);
     let tokens: Vec<Token> = lexer.collect::<Result<_, _>>()?;
@@ -70,7 +70,6 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     if cli.lex {
         println!("--- Generated Tokens ---");
         for token in &tokens {
-            // 使用引用来遍历
             println!("  {:?}", token);
         }
         println!("------------------------");
@@ -123,7 +122,7 @@ fn run_command(command: &mut Command) -> Result<(), Box<dyn std::error::Error>> 
 /// Stage 1: Call `gcc` to preprocess the C source file.
 fn preprocess(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut cmd = Command::new("gcc");
-    cmd.arg("-E").arg("-P").arg(input).arg("-o").arg(output);
+    cmd.arg("-E").arg(input).arg("-o").arg(output);
 
     run_command(&mut cmd)
 }
@@ -136,7 +135,6 @@ fn assemble(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error
     run_command(&mut cmd)
 }
 
-// *** 注意这个函数的签名已经改变！ ***
 /// The main compilation function. Takes tokens and will eventually parse and codegen.
 fn compile_to_assembly(tokens: Vec<Token>) -> Result<String, Box<dyn std::error::Error>> {
     // --- STEP 2: PARSING (Future Work) ---
