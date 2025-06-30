@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use my_c_compiler::lexer::{self, Token};
+use my_c_compiler::parser;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -78,17 +79,37 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 3. STAGE 3: COMPILE TO ASSEMBLY (现在接收 tokens)
-    println!("\n3. Compiling (parse, codegen)...");
+    println!("\n3. Parsing tokens...");
+    let mut parser = parser::Parser::new(&tokens);
+    let ast = parser.parse()?; // 调用解析器
+    println!("   ✓ Parsing successful.");
+
+    // --parse 标志检查：在解析后窥视并退出
+    if cli.parse {
+        println!("--- Generated AST ---");
+        // 使用 {:#?} "pretty-print" 格式化输出 AST
+        println!("{:#?}", ast);
+        println!("---------------------");
+        println!("\nHalting as requested by --parse.");
+        fs::remove_file(&preprocessed_path)?;
+        return Ok(());
+    }
+
+    // 4. STAGE 4: COMPILE TO ASSEMBLY (之前叫 STAGE 3)
+    println!("\n4. Compiling (codegen)...");
+
+    // **修正 1: 将 ast 传递给 compile_to_assembly**
+    let assembly_code = compile_to_assembly(ast)?;
+
+    // **修正 2: 重新加入写入文件的关键步骤**
     let assembly_path = parent_dir.join(file_stem).with_extension("s");
-    // 将 tokens 移动到下一个函数
-    let assembly_code = compile_to_assembly(tokens)?;
-    fs::write(&assembly_path, assembly_code)?;
+    fs::write(&assembly_path, &assembly_code)?; // <-- 将 assembly_code 写入文件
     println!("   ✓ Compilation complete: {}", assembly_path.display());
 
-    // 4. STAGE 4: ASSEMBLE & LINK
-    println!("\n4. Assembling and linking...");
+    // 5. STAGE 5: ASSEMBLE & LINK
+    println!("\n5. Assembling and linking...");
     let output_path = parent_dir.join(file_stem);
+    // 现在 assemble 调用是有效的，因为它操作的是一个刚刚被创建的 .s 文件
     assemble(&assembly_path, &output_path)?;
     println!(
         "   ✓ Assembling and linking complete: {}",
@@ -135,15 +156,14 @@ fn assemble(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error
     run_command(&mut cmd)
 }
 
-/// The main compilation function. Takes tokens and will eventually parse and codegen.
-fn compile_to_assembly(tokens: Vec<Token>) -> Result<String, Box<dyn std::error::Error>> {
-    // --- STEP 2: PARSING (Future Work) ---
-    // 我们现在接收了 tokens，为解析做好了准备
-    println!("   -> (Stub) Parsing {} tokens...", tokens.len());
-    // let ast = parse(tokens)?;
-
-    // --- STEP 3: CODE GENERATION (Future Work) ---
+// *** 修正 3: 恢复 compile_to_assembly 的正确签名！ ***
+/// The main compilation function. Takes an AST and will eventually generate code.
+fn compile_to_assembly(ast: parser::Program) -> Result<String, Box<dyn std::error::Error>> {
     println!("   -> (Stub) Generating assembly from AST...");
+    // 我们可以从 AST 中提取信息来进行下一步
+    println!("   -> Compiling function '{}'", ast.function.name);
+
+    // 将来，我们会遍历 AST 来生成真正的代码
     // let assembly_code = codegen(ast)?;
 
     // 目前，我们仍然返回硬编码的汇编代码
