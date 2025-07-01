@@ -29,6 +29,9 @@ impl TackyGenerator {
         match op {
             parser::UnaryOperator::Negation => tacky::UnaryOperator::Negate,
             parser::UnaryOperator::BitwiseComplement => tacky::UnaryOperator::Complement,
+            _ => {
+                panic!("unsurrot")
+            }
         }
     }
 
@@ -39,6 +42,9 @@ impl TackyGenerator {
             parser::BinaryOperator::Multiply => tacky::BinaryOperator::Multiply,
             parser::BinaryOperator::Divide => tacky::BinaryOperator::Divide,
             parser::BinaryOperator::Remainder => tacky::BinaryOperator::Remainder,
+            _ => {
+                panic!("unsurrot")
+            }
         }
     }
 

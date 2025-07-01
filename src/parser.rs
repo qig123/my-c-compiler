@@ -27,6 +27,7 @@ pub enum Statement {
 pub enum UnaryOperator {
     Negation,          // 对应语义 "Negate"
     BitwiseComplement, // 对应语义 "Complement"
+    Bang,
 }
 #[derive(Debug)]
 pub enum BinaryOperator {
@@ -35,6 +36,14 @@ pub enum BinaryOperator {
     Multiply, // 使用完整单词
     Divide,   // 使用完整单词
     Remainder,
+    Or,
+    And,
+    EqualEqual,
+    BangEqual,
+    LessEqual,
+    Less,
+    Greater,
+    GreaterEqual,
 }
 
 /// 代表一个表达式
@@ -157,6 +166,14 @@ impl<'a> Parser<'a> {
             TokenType::Asterisk => Some((BinaryOperator::Multiply, 50)),
             TokenType::Slash => Some((BinaryOperator::Divide, 50)),
             TokenType::Percent => Some((BinaryOperator::Remainder, 50)),
+            TokenType::Less => Some((BinaryOperator::Less, 35)),
+            TokenType::LessEqual => Some((BinaryOperator::LessEqual, 35)),
+            TokenType::Greater => Some((BinaryOperator::Greater, 35)),
+            TokenType::GreaterEqual => Some((BinaryOperator::GreaterEqual, 35)),
+            TokenType::EqualEqual => Some((BinaryOperator::EqualEqual, 30)),
+            TokenType::BangEqual => Some((BinaryOperator::BangEqual, 30)),
+            TokenType::And => Some((BinaryOperator::Add, 10)),
+            TokenType::Or => Some((BinaryOperator::Add, 5)),
             _ => None,
         }
     }
@@ -240,7 +257,7 @@ impl<'a> Parser<'a> {
                 Ok(Expression::Constant(*val))
             }
             // <factor> ::= <unop> <factor>
-            TokenType::Minus | TokenType::Tilde => {
+            TokenType::Minus | TokenType::Tilde | TokenType::Bang => {
                 let operator = self.parse_unary_operator()?;
                 // 递归调用 parse_factor，而不是 parse_expression
                 let expression = self.parse_factor()?;
@@ -263,13 +280,14 @@ impl<'a> Parser<'a> {
             )),
         }
     }
-    /// <unop> ::= "-" | "~"
+    /// <unop> ::= "-" | "~" | "!"
     fn parse_unary_operator(&mut self) -> Result<UnaryOperator, String> {
         // 消费掉操作符 Token
         if let Some(token) = self.consume() {
             match token.token_type {
                 TokenType::Minus => Ok(UnaryOperator::Negation),
                 TokenType::Tilde => Ok(UnaryOperator::BitwiseComplement),
+                TokenType::Bang => Ok(UnaryOperator::Bang),
                 _ => Err(format!(
                     "Expected unary operator, but found {:?} on line {}",
                     token.token_type, token.line
