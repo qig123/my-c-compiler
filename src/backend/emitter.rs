@@ -61,6 +61,9 @@ fn emit_function(output: &mut String, func: &Function) -> Result<(), std::fmt::E
                 writeln!(output, "    popq %rbp")?;
                 writeln!(output, "    ret")?;
             }
+            _ => {
+                panic!("not support")
+            }
         }
     }
     Ok(())
@@ -81,6 +84,9 @@ fn format_operand(op: &Operand) -> String {
         Operand::Reg(reg) => match reg {
             Register::AX => "%eax".to_string(),
             Register::R10 => "%r10d".to_string(),
+            _ => {
+                panic!("not support")
+            }
         },
         Operand::Stack(offset) => format!("{}(%rbp)", offset),
         Operand::Pseudo(name) => {

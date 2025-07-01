@@ -2,8 +2,10 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Register {
-    AX,  // 代表 EAX/RAX
+    AX, // 代表 EAX/RAX
+    DX,
     R10, // 代表 R10D/R10
+    R11,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,7 +13,12 @@ pub enum UnaryOperator {
     Neg, // neg
     Not, // not
 }
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+}
 #[derive(Debug, Clone)]
 pub enum Operand {
     Imm(i32),
@@ -22,9 +29,24 @@ pub enum Operand {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
-    Mov { src: Operand, dst: Operand },
-    Unary { op: UnaryOperator, operand: Operand },
-    AllocateStack { bytes: u32 },
+    Mov {
+        src: Operand,
+        dst: Operand,
+    },
+    Unary {
+        op: UnaryOperator,
+        operand: Operand,
+    },
+    Binary {
+        op: BinaryOperator,
+        src: Operand,
+        dst: Operand,
+    },
+    AllocateStack {
+        bytes: u32,
+    },
+    Idiv(Operand),
+    Cdq,
     Ret,
 }
 

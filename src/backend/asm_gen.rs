@@ -63,8 +63,76 @@ impl AsmGenerator {
                         operand: self.convert_tacky_val(dst),
                     });
                 }
-                _ => {
-                    return Err(format!("unsupport type",));
+                tacky::Instruction::Binary {
+                    op,
+                    src1,
+                    src2,
+                    dst,
+                } => {
+                    let dst_operand = self.convert_tacky_val(dst);
+
+                    match op {
+                        // --- 除法和取余的特殊情况 ---
+                        tacky::BinaryOperator::Divide => {
+                            // Mov(src1, Reg(AX))
+                            instructions.push(assembly::Instruction::Mov {
+                                src: self.convert_tacky_val(src1),
+                                dst: assembly::Operand::Reg(assembly::Register::AX),
+                            });
+                            // Cdq
+                            instructions.push(assembly::Instruction::Cdq);
+                            // Idiv(src2)
+                            instructions
+                                .push(assembly::Instruction::Idiv(self.convert_tacky_val(src2)));
+                            // Mov(Reg(AX), dst)
+                            instructions.push(assembly::Instruction::Mov {
+                                src: assembly::Operand::Reg(assembly::Register::AX),
+                                dst: dst_operand,
+                            });
+                        }
+                        tacky::BinaryOperator::Remainder => {
+                            // Mov(src1, Reg(AX))
+                            instructions.push(assembly::Instruction::Mov {
+                                src: self.convert_tacky_val(src1),
+                                dst: assembly::Operand::Reg(assembly::Register::AX),
+                            });
+                            // Cdq
+                            instructions.push(assembly::Instruction::Cdq);
+                            // Idiv(src2)
+                            instructions
+                                .push(assembly::Instruction::Idiv(self.convert_tacky_val(src2)));
+                            // Mov(Reg(DX), dst)  <-- 这是和除法唯一的不同
+                            instructions.push(assembly::Instruction::Mov {
+                                src: assembly::Operand::Reg(assembly::Register::DX),
+                                dst: dst_operand,
+                            });
+                        }
+
+                        // --- 加、减、乘的通用情况 ---
+                        _ => {
+                            let asm_op = match op {
+                                tacky::BinaryOperator::Add => assembly::BinaryOperator::Add,
+                                tacky::BinaryOperator::Subtract => {
+                                    assembly::BinaryOperator::Subtract
+                                }
+                                tacky::BinaryOperator::Multiply => {
+                                    assembly::BinaryOperator::Multiply
+                                }
+                                _ => unreachable!(), // 除法和取余已经被处理了
+                            };
+                            // Mov(src1, dst)
+                            instructions.push(assembly::Instruction::Mov {
+                                src: self.convert_tacky_val(src1),
+                                dst: dst_operand.clone(), // 因为 dst 后面还要用，所以 clone
+                            });
+                            // Binary(op, src2, dst)
+                            instructions.push(assembly::Instruction::Binary {
+                                op: asm_op,
+                                src: self.convert_tacky_val(src2),
+                                dst: dst_operand,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -103,7 +171,14 @@ impl AsmGenerator {
                 assembly::Instruction::Unary { operand, .. } => {
                     self.assign_stack_offset(operand, &mut var_map, &mut current_offset);
                 }
-                _ => {} // Ret, AllocateStack 不包含操作数
+                assembly::Instruction::Binary { src, dst, .. } => {
+                    self.assign_stack_offset(src, &mut var_map, &mut current_offset);
+                    self.assign_stack_offset(dst, &mut var_map, &mut current_offset);
+                }
+                assembly::Instruction::Idiv(operand) => {
+                    self.assign_stack_offset(operand, &mut var_map, &mut current_offset);
+                }
+                _ => {} // Ret, Cdq, AllocateStack 不包含需要替换的操作数
             }
         }
         Ok(current_offset.abs() as u32)
@@ -142,26 +217,78 @@ impl AsmGenerator {
         }
 
         // 2. 遍历并修复 mov mem, mem
+        // 遍历并修复所有可能的非法指令
         for inst in &asm_func.instructions {
-            if let assembly::Instruction::Mov {
-                src: assembly::Operand::Stack(src_offset),
-                dst: assembly::Operand::Stack(dst_offset),
-            } = inst
-            {
-                // 这是无效的 mov mem, mem, 需要修复
-                // movl -4(%rbp), %r10d
-                new_instructions.push(assembly::Instruction::Mov {
-                    src: assembly::Operand::Stack(*src_offset),
-                    dst: assembly::Operand::Reg(assembly::Register::R10),
-                });
-                // movl %r10d, -8(%rbp)
-                new_instructions.push(assembly::Instruction::Mov {
-                    src: assembly::Operand::Reg(assembly::Register::R10),
-                    dst: assembly::Operand::Stack(*dst_offset),
-                });
-            } else {
-                // 其他指令直接复制
-                new_instructions.push(inst.clone());
+            // 使用一个大的 match 语句来处理所有情况，比多个 if let 更清晰
+            match inst {
+                // 修复 mov mem, mem
+                assembly::Instruction::Mov {
+                    src: assembly::Operand::Stack(src_offset),
+                    dst: assembly::Operand::Stack(dst_offset),
+                } => {
+                    new_instructions.push(assembly::Instruction::Mov {
+                        src: assembly::Operand::Stack(*src_offset),
+                        dst: assembly::Operand::Reg(assembly::Register::R10),
+                    });
+                    new_instructions.push(assembly::Instruction::Mov {
+                        src: assembly::Operand::Reg(assembly::Register::R10),
+                        dst: assembly::Operand::Stack(*dst_offset),
+                    });
+                }
+
+                // --- 修复 add/sub mem, mem ---
+                assembly::Instruction::Binary {
+                    op: op @ (assembly::BinaryOperator::Add | assembly::BinaryOperator::Subtract),
+                    src: assembly::Operand::Stack(src_offset),
+                    dst: assembly::Operand::Stack(dst_offset),
+                } => {
+                    new_instructions.push(assembly::Instruction::Mov {
+                        src: assembly::Operand::Stack(*src_offset),
+                        dst: assembly::Operand::Reg(assembly::Register::R10),
+                    });
+                    new_instructions.push(assembly::Instruction::Binary {
+                        op: *op,
+                        src: assembly::Operand::Reg(assembly::Register::R10),
+                        dst: assembly::Operand::Stack(*dst_offset),
+                    });
+                }
+
+                // --- 【修复 imul ?, mem ---
+                assembly::Instruction::Binary {
+                    op: assembly::BinaryOperator::Multiply,
+                    src,
+                    dst: assembly::Operand::Stack(dst_offset),
+                } => {
+                    new_instructions.push(assembly::Instruction::Mov {
+                        src: assembly::Operand::Stack(*dst_offset),
+                        dst: assembly::Operand::Reg(assembly::Register::R11),
+                    });
+                    new_instructions.push(assembly::Instruction::Binary {
+                        op: assembly::BinaryOperator::Multiply,
+                        src: src.clone(),
+                        dst: assembly::Operand::Reg(assembly::Register::R11),
+                    });
+                    new_instructions.push(assembly::Instruction::Mov {
+                        src: assembly::Operand::Reg(assembly::Register::R11),
+                        dst: assembly::Operand::Stack(*dst_offset),
+                    });
+                }
+
+                // --- 修复 idiv imm ---
+                assembly::Instruction::Idiv(assembly::Operand::Imm(val)) => {
+                    new_instructions.push(assembly::Instruction::Mov {
+                        src: assembly::Operand::Imm(*val),
+                        dst: assembly::Operand::Reg(assembly::Register::R10),
+                    });
+                    new_instructions.push(assembly::Instruction::Idiv(assembly::Operand::Reg(
+                        assembly::Register::R10,
+                    )));
+                }
+
+                // 所有其他合法指令，直接复制
+                _ => {
+                    new_instructions.push(inst.clone());
+                }
             }
         }
 
