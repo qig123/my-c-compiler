@@ -160,8 +160,34 @@ impl AsmGenerator {
                             instructions.push(assembly::Instruction::SetCC(cond_code, dst_operand));
                         }
                         // 算术运算符
-                        tacky::BinaryOperator::Divide => { /* ... */ }
-                        tacky::BinaryOperator::Remainder => { /* ... */ }
+                        // 【修复】填充除法逻辑
+                        tacky::BinaryOperator::Divide => {
+                            instructions.push(assembly::Instruction::Mov {
+                                src: src1_operand,
+                                dst: assembly::Operand::Reg(assembly::Register::AX),
+                            });
+                            instructions.push(assembly::Instruction::Cdq);
+                            instructions.push(assembly::Instruction::Idiv(src2_operand));
+                            instructions.push(assembly::Instruction::Mov {
+                                src: assembly::Operand::Reg(assembly::Register::AX),
+                                dst: dst_operand,
+                            });
+                        }
+
+                        // 【修复】填充取余逻辑
+                        tacky::BinaryOperator::Remainder => {
+                            instructions.push(assembly::Instruction::Mov {
+                                src: src1_operand,
+                                dst: assembly::Operand::Reg(assembly::Register::AX),
+                            });
+                            instructions.push(assembly::Instruction::Cdq);
+                            instructions.push(assembly::Instruction::Idiv(src2_operand));
+                            // 余数在 DX 寄存器
+                            instructions.push(assembly::Instruction::Mov {
+                                src: assembly::Operand::Reg(assembly::Register::DX),
+                                dst: dst_operand,
+                            });
+                        }
                         tacky::BinaryOperator::Add
                         | tacky::BinaryOperator::Subtract
                         | tacky::BinaryOperator::Multiply => {
@@ -343,50 +369,32 @@ impl AsmGenerator {
                         assembly::Register::R10,
                     )));
                 }
-                // 【新增】修复 cmp 指令
-                // 1. cmp mem, mem
-                assembly::Instruction::Cmp {
-                    src1: assembly::Operand::Stack(src1_offset),
-                    src2: assembly::Operand::Stack(src2_offset),
-                } => {
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Stack(*src1_offset),
-                        dst: assembly::Operand::Reg(assembly::Register::R10),
-                    });
-                    new_instructions.push(assembly::Instruction::Cmp {
-                        src1: assembly::Operand::Reg(assembly::Register::R10),
-                        src2: assembly::Operand::Stack(*src2_offset),
-                    });
-                }
-                // 2. cmp reg, imm (第二个操作数不能是立即数)
-                assembly::Instruction::Cmp {
-                    src1: assembly::Operand::Imm(val),
-                    src2: op2 @ assembly::Operand::Reg(_),
-                } => {
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Imm(*val),
-                        dst: assembly::Operand::Reg(assembly::Register::R11),
-                    });
-                    new_instructions.push(assembly::Instruction::Cmp {
-                        src1: assembly::Operand::Reg(assembly::Register::R11),
-                        src2: op2.clone(),
-                    });
-                }
-                // 3. cmp mem, imm (第二个操作数不能是立即数)
-                assembly::Instruction::Cmp {
-                    src1: assembly::Operand::Imm(val),
-                    src2: op2 @ assembly::Operand::Stack(_),
-                } => {
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Imm(*val),
-                        dst: assembly::Operand::Reg(assembly::Register::R11),
-                    });
-                    new_instructions.push(assembly::Instruction::Cmp {
-                        src1: assembly::Operand::Reg(assembly::Register::R11),
-                        src2: op2.clone(),
-                    });
-                }
+                assembly::Instruction::Cmp { src1, src2 } => {
+                    let mut s1 = src1.clone();
+                    let mut s2 = src2.clone();
 
+                    // 规则 1: 如果两个操作数都是内存，把 src1 移到 R10
+                    if let (assembly::Operand::Stack(o1), assembly::Operand::Stack(_)) = (&s1, &s2)
+                    {
+                        new_instructions.push(assembly::Instruction::Mov {
+                            src: assembly::Operand::Stack(*o1),
+                            dst: assembly::Operand::Reg(assembly::Register::R10),
+                        });
+                        s1 = assembly::Operand::Reg(assembly::Register::R10);
+                    }
+
+                    // 规则 2: 如果第二个操作数是立即数，把它移到 R11
+                    if let assembly::Operand::Imm(val) = &s2 {
+                        new_instructions.push(assembly::Instruction::Mov {
+                            src: assembly::Operand::Imm(*val),
+                            dst: assembly::Operand::Reg(assembly::Register::R11),
+                        });
+                        s2 = assembly::Operand::Reg(assembly::Register::R11);
+                    }
+
+                    // 添加最终修复好的 cmp 指令
+                    new_instructions.push(assembly::Instruction::Cmp { src1: s1, src2: s2 });
+                }
                 // 所有其他合法指令，直接复制
                 _ => {
                     new_instructions.push(inst.clone());

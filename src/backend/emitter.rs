@@ -1,9 +1,38 @@
 // src/backend/emitter.rs
 
 use crate::ir::assembly::{
-    BinaryOperator, Function, Instruction, Operand, Program, Register, UnaryOperator,
+    BinaryOperator, CondCode, Function, Instruction, Operand, Program, Register, UnaryOperator,
 };
 use std::fmt::Write;
+
+struct PlatformConfig {
+    local_label_prefix: &'static str,
+    global_label_prefix: &'static str,
+}
+
+impl PlatformConfig {
+    fn new() -> Self {
+        #[cfg(target_os = "macos")]
+        return PlatformConfig {
+            local_label_prefix: "L",
+            global_label_prefix: "_",
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        return PlatformConfig {
+            local_label_prefix: ".L",
+            global_label_prefix: "",
+        };
+    }
+
+    fn format_local_label(&self, label: &str) -> String {
+        format!("{}{}", self.local_label_prefix, label)
+    }
+
+    fn format_global_label(&self, label: &str) -> String {
+        format!("{}{}", self.global_label_prefix, label)
+    }
+}
 
 /// 将汇编 AST 转换为最终的汇编代码字符串。
 pub fn emit_assembly(asm_program: Program) -> Result<String, Box<dyn std::error::Error>> {
@@ -21,29 +50,23 @@ pub fn emit_assembly(asm_program: Program) -> Result<String, Box<dyn std::error:
 
 /// 发射单个函数的汇编代码。
 fn emit_function(output: &mut String, func: &Function) -> Result<(), std::fmt::Error> {
-    // 根据项目要求处理函数名
-    #[cfg(target_os = "macos")]
-    let function_name = format!("_{}", func.name);
-    #[cfg(not(target_os = "macos"))]
-    let function_name = func.name.as_str();
+    let config = PlatformConfig::new();
 
-    // 1. 发射函数标签和全局声明
+    let function_name = config.format_global_label(&func.name);
+
     writeln!(output, ".globl {}", function_name)?;
     writeln!(output, "{}:", function_name)?;
-
-    // 2. 发射函数序言
     writeln!(output, "    pushq %rbp")?;
     writeln!(output, "    movq %rsp, %rbp")?;
 
-    // 3. 遍历并转换每一条指令
     for instruction in &func.instructions {
         match instruction {
             Instruction::Mov { src, dst } => {
                 writeln!(
                     output,
                     "    movl {}, {}",
-                    format_operand(src),
-                    format_operand(dst)
+                    format_operand(src, false),
+                    format_operand(dst, false)
                 )?;
             }
             Instruction::Unary { op, operand } => {
@@ -51,41 +74,112 @@ fn emit_function(output: &mut String, func: &Function) -> Result<(), std::fmt::E
                     output,
                     "    {} {}",
                     format_unary_operator(op),
-                    format_operand(operand)
+                    format_operand(operand, false)
                 )?;
             }
-            // --- 【新增】 ---
             Instruction::Binary { op, src, dst } => {
                 writeln!(
                     output,
                     "    {} {}, {}",
                     format_binary_operator(op),
-                    format_operand(src),
-                    format_operand(dst)
+                    format_operand(src, false),
+                    format_operand(dst, false)
                 )?;
             }
             Instruction::Idiv(operand) => {
-                writeln!(output, "    idivl {}", format_operand(operand))?;
+                writeln!(output, "    idivl {}", format_operand(operand, false))?;
             }
             Instruction::Cdq => {
                 writeln!(output, "    cdq")?;
             }
-            // --- 【新增结束】 ---
             Instruction::AllocateStack { bytes } => {
                 writeln!(output, "    subq ${}, %rsp", bytes)?;
             }
             Instruction::Ret => {
-                // 发射函数尾声
                 writeln!(output, "    movq %rbp, %rsp")?;
                 writeln!(output, "    popq %rbp")?;
                 writeln!(output, "    ret")?;
             }
-            _ => {
-                panic!("test")
+            // --- 【新增指令的发射逻辑】 ---
+            Instruction::Cmp { src1, src2 } => {
+                writeln!(
+                    output,
+                    "    cmpl {}, {}",
+                    format_operand(src1, false),
+                    format_operand(src2, false)
+                )?;
+            }
+            Instruction::Label(name) => {
+                writeln!(output, "{}:", config.format_local_label(name))?;
+            }
+            Instruction::Jmp(target) => {
+                writeln!(output, "    jmp {}", config.format_local_label(target))?;
+            }
+            Instruction::JmpCC(cond, target) => {
+                writeln!(
+                    output,
+                    "    j{} {}",
+                    format_cond_code(cond),
+                    config.format_local_label(target)
+                )?;
+            }
+            Instruction::SetCC(cond, operand) => {
+                // SetCC 操作的是 1 字节操作数，所以 is_byte_operand 为 true
+                writeln!(
+                    output,
+                    "    set{} {}",
+                    format_cond_code(cond),
+                    format_operand(operand, true)
+                )?;
             }
         }
     }
     Ok(())
+}
+/// 【新增】辅助函数：将 CondCode 转换为指令后缀。
+fn format_cond_code(cc: &CondCode) -> &'static str {
+    match cc {
+        CondCode::E => "e",
+        CondCode::NE => "ne",
+        CondCode::L => "l",
+        CondCode::LE => "le",
+        CondCode::G => "g",
+        CondCode::GE => "ge",
+    }
+}
+
+/// 【核心修改】辅助函数：将 Operand 格式化为汇编操作数。
+/// 新增了一个 `is_byte_operand` 参数来决定寄存器的格式。
+fn format_operand(op: &Operand, is_byte_operand: bool) -> String {
+    match op {
+        Operand::Imm(value) => format!("${}", value),
+        Operand::Reg(reg) => {
+            if is_byte_operand {
+                // 1-byte register names
+                match reg {
+                    Register::AX => "%al".to_string(),
+                    Register::DX => "%dl".to_string(),
+                    Register::R10 => "%r10b".to_string(),
+                    Register::R11 => "%r11b".to_string(),
+                }
+            } else {
+                // 4-byte register names
+                match reg {
+                    Register::AX => "%eax".to_string(),
+                    Register::DX => "%edx".to_string(),
+                    Register::R10 => "%r10d".to_string(),
+                    Register::R11 => "%r11d".to_string(),
+                }
+            }
+        }
+        Operand::Stack(offset) => format!("{}(%rbp)", offset),
+        Operand::Pseudo(name) => {
+            panic!(
+                "Error: Pseudoregister '{}' was not replaced before code emission.",
+                name
+            );
+        }
+    }
 }
 
 fn format_unary_operator(op: &UnaryOperator) -> &'static str {
@@ -101,25 +195,5 @@ fn format_binary_operator(op: &BinaryOperator) -> &'static str {
         BinaryOperator::Add => "addl",
         BinaryOperator::Subtract => "subl",
         BinaryOperator::Multiply => "imull",
-    }
-}
-
-/// 【修改】辅助函数：将 Operand 枚举格式化为汇编操作数。
-fn format_operand(op: &Operand) -> String {
-    match op {
-        Operand::Imm(value) => format!("${}", value),
-        Operand::Reg(reg) => match reg {
-            Register::AX => "%eax".to_string(),
-            Register::DX => "%edx".to_string(), // <-- 新增
-            Register::R10 => "%r10d".to_string(),
-            Register::R11 => "%r11d".to_string(), // <-- 新增
-        },
-        Operand::Stack(offset) => format!("{}(%rbp)", offset),
-        Operand::Pseudo(name) => {
-            panic!(
-                "Error: Pseudoregister '{}' was not replaced before code emission.",
-                name
-            );
-        }
     }
 }
