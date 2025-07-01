@@ -1,6 +1,8 @@
 // src/backend/emitter.rs
 
-use crate::ir::assembly::{Function, Instruction, Operand, Program, Register, UnaryOperator};
+use crate::ir::assembly::{
+    BinaryOperator, Function, Instruction, Operand, Program, Register, UnaryOperator,
+};
 use std::fmt::Write;
 
 /// 将汇编 AST 转换为最终的汇编代码字符串。
@@ -52,6 +54,23 @@ fn emit_function(output: &mut String, func: &Function) -> Result<(), std::fmt::E
                     format_operand(operand)
                 )?;
             }
+            // --- 【新增】 ---
+            Instruction::Binary { op, src, dst } => {
+                writeln!(
+                    output,
+                    "    {} {}, {}",
+                    format_binary_operator(op),
+                    format_operand(src),
+                    format_operand(dst)
+                )?;
+            }
+            Instruction::Idiv(operand) => {
+                writeln!(output, "    idivl {}", format_operand(operand))?;
+            }
+            Instruction::Cdq => {
+                writeln!(output, "    cdq")?;
+            }
+            // --- 【新增结束】 ---
             Instruction::AllocateStack { bytes } => {
                 writeln!(output, "    subq ${}, %rsp", bytes)?;
             }
@@ -61,19 +80,24 @@ fn emit_function(output: &mut String, func: &Function) -> Result<(), std::fmt::E
                 writeln!(output, "    popq %rbp")?;
                 writeln!(output, "    ret")?;
             }
-            _ => {
-                panic!("not support")
-            }
         }
     }
     Ok(())
 }
 
-/// 【新增】辅助函数：将 UnaryOperator 枚举格式化为指令名。
 fn format_unary_operator(op: &UnaryOperator) -> &'static str {
     match op {
         UnaryOperator::Neg => "negl",
         UnaryOperator::Not => "notl",
+    }
+}
+
+/// 【新增】辅助函数：将 BinaryOperator 枚举格式化为指令名。
+fn format_binary_operator(op: &BinaryOperator) -> &'static str {
+    match op {
+        BinaryOperator::Add => "addl",
+        BinaryOperator::Subtract => "subl",
+        BinaryOperator::Multiply => "imull",
     }
 }
 
@@ -83,15 +107,12 @@ fn format_operand(op: &Operand) -> String {
         Operand::Imm(value) => format!("${}", value),
         Operand::Reg(reg) => match reg {
             Register::AX => "%eax".to_string(),
+            Register::DX => "%edx".to_string(), // <-- 新增
             Register::R10 => "%r10d".to_string(),
-            _ => {
-                panic!("not support")
-            }
+            Register::R11 => "%r11d".to_string(), // <-- 新增
         },
         Operand::Stack(offset) => format!("{}(%rbp)", offset),
         Operand::Pseudo(name) => {
-            // Pseudo 操作数不应该到达代码发射阶段。
-            // 如果到了，说明之前的编译趟有 bug。
             panic!(
                 "Error: Pseudoregister '{}' was not replaced before code emission.",
                 name
