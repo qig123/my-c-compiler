@@ -25,6 +25,7 @@ pub enum TokenType {
     LessEqual,    // <=
     Greater,      // >
     GreaterEqual, // >=
+    Assign,       // =
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
@@ -260,10 +261,7 @@ impl<'a> Lexer<'a> {
                     self.chars.next();
                     Ok(TokenType::Equal)
                 } else {
-                    Err(format!(
-                        "Unrecognized character '{}' on line {}",
-                        c, self.line
-                    ))
+                    Ok(TokenType::Assign)
                 }
             }
             'a'..='z' | 'A'..='Z' | '_' => Ok(self.lex_identifier_or_keyword()),
