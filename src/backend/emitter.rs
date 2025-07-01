@@ -12,7 +12,7 @@ pub fn emit_assembly(asm_program: Program) -> Result<String, Box<dyn std::error:
 
     // 根据项目要求，在 Linux 上添加 .section 指令
     #[cfg(target_os = "linux")]
-    writeln!(&mut output, r#"    .section .note.GNU-stack,"",@progbits"#)?;
+    writeln!(&mut output, r#".section .note.GNU-stack,"",@progbits"#)?;
 
     Ok(output)
 }

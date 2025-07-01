@@ -20,7 +20,7 @@ pub enum Operand {
     Stack(i32),     // 栈地址，如 -4, -8
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Instruction {
     Mov { src: Operand, dst: Operand },
     Unary { op: UnaryOperator, operand: Operand },

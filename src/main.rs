@@ -27,7 +27,9 @@ struct Cli {
     /// Stop after assembly generation and print assembly AST
     #[arg(long)]
     codegen: bool,
-
+    /// Do not delete the generated .s assembly file
+    #[arg(long)]
+    keep_asm: bool,
     /// The C source file to compile
     input_file: PathBuf,
 }
@@ -134,8 +136,25 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // --- Cleanup ---
+    // 总是删除预处理文件
     fs::remove_file(&preprocessed_path)?;
-    fs::remove_file(&assembly_path)?;
+
+    // 【核心修改】只有在没有 --keep-asm 标志时才删除 .s 文件
+    if !cli.keep_asm {
+        if let Err(e) = fs::remove_file(&assembly_path) {
+            // 如果文件因为某些原因不存在，打印一个警告而不是让整个程序失败
+            eprintln!(
+                "Warning: could not remove temporary assembly file '{}': {}",
+                assembly_path.display(),
+                e
+            );
+        }
+    } else {
+        println!(
+            "   ℹ️ Assembly file kept as requested by --keep-asm: {}",
+            assembly_path.display()
+        );
+    }
 
     println!(
         "\n✅ Success! Executable created at: {}",

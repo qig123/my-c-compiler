@@ -166,21 +166,3 @@ impl AsmGenerator {
         asm_func.instructions = new_instructions;
     }
 }
-
-// Instruction 没有实现 Clone，所以我们需要手动克隆
-impl Clone for assembly::Instruction {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Mov { src, dst } => Self::Mov {
-                src: src.clone(),
-                dst: dst.clone(),
-            },
-            Self::Unary { op, operand } => Self::Unary {
-                op: *op,
-                operand: operand.clone(),
-            },
-            Self::AllocateStack { bytes } => Self::AllocateStack { bytes: *bytes },
-            Self::Ret => Self::Ret,
-        }
-    }
-}
