@@ -1,8 +1,7 @@
-//  src/main.rs
+// src/main.rs
 
 use clap::Parser as ClapParser;
-use my_c_compiler::codegen::CodeGenerator;
-use my_c_compiler::emitter;
+use my_c_compiler::backend::{asm_gen::AsmGenerator, emitter, tacky_gen::TackyGenerator};
 use my_c_compiler::lexer::{self, Token};
 use my_c_compiler::parser as CParser;
 use std::fs;
@@ -13,13 +12,23 @@ use std::process::Command;
 #[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    // ... Cli 结构体定义不变 ...
+    /// Stop after lexing and print tokens
     #[arg(long)]
     lex: bool,
+
+    /// Stop after parsing and print C AST
     #[arg(long)]
     parse: bool,
+
+    /// 【新增】Stop after TACKY IR generation and print TACKY
+    #[arg(long)]
+    tacky: bool,
+
+    /// Stop after assembly generation and print assembly AST
     #[arg(long)]
     codegen: bool,
+
+    /// The C source file to compile
     input_file: PathBuf,
 }
 
@@ -33,8 +42,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    // --- STAGE 1: PREPROCESSING ---
+    // --- STAGE 1 & 2: PREPROCESSING and LEXING (不变) ---
     println!("1. Preprocessing {}...", cli.input_file.display());
+    // ... (preprocessing code is correct) ...
     let input_path = &cli.input_file;
     if !input_path.exists() {
         return Err(format!("Input file not found: {}", input_path.display()).into());
@@ -43,13 +53,8 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let parent_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
     let preprocessed_path = parent_dir.join(file_stem).with_extension("i");
     preprocess(input_path, &preprocessed_path)?;
-    println!(
-        "   ✓ Preprocessing complete: {}",
-        preprocessed_path.display()
-    );
     let source_code = fs::read_to_string(&preprocessed_path)?;
 
-    // --- STAGE 2: LEXING ---
     println!("\n2. Lexing source code...");
     let lexer = lexer::Lexer::new(&source_code);
     let tokens: Vec<Token> = lexer.collect::<Result<_, _>>()?;
@@ -64,7 +69,7 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // --- STAGE 3: PARSING (C -> C AST) ---
+    // --- STAGE 3: PARSING (C -> C AST) (不变) ---
     println!("\n3. Parsing tokens into C Abstract Syntax Tree (AST)...");
     let mut parser = CParser::Parser::new(&tokens);
     let c_ast = parser.parse()?;
@@ -79,10 +84,25 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // --- STAGE 4: CODE GENERATION (C AST -> Assembly AST) ---
-    println!("\n4. Generating Assembly AST from C AST...");
-    let codegen = CodeGenerator::new(c_ast);
-    let asm_ast = codegen.generate()?;
+    // --- 【STAGE 4: TACKY IR GENERATION】 (C AST -> TACKY IR) ---
+    println!("\n4. Generating TACKY Intermediate Representation (IR)...");
+    let mut tacky_generator = TackyGenerator::new();
+    let tacky_ir = tacky_generator.generate_tacky(c_ast)?; // c_ast 被消耗
+    println!("   ✓ TACKY IR generation successful.");
+    if cli.tacky {
+        println!(
+            "--- Generated TACKY IR ---\n{:#?}\n------------------------",
+            tacky_ir
+        );
+        println!("\nHalting as requested by --tacky.");
+        fs::remove_file(&preprocessed_path)?;
+        return Ok(());
+    }
+
+    // --- 【STAGE 5: ASSEMBLY GENERATION】 (TACKY IR -> Assembly AST) ---
+    println!("\n5. Generating Assembly AST from TACKY IR...");
+    let mut asm_generator = AsmGenerator::new();
+    let asm_ast = asm_generator.generate_assembly(tacky_ir)?; // tacky_ir 被消耗
     println!("   ✓ Assembly AST generation successful.");
     if cli.codegen {
         println!(
@@ -94,9 +114,9 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // --- STAGE 5: CODE EMISSION (Assembly AST -> Assembly Code String) ---
-    println!("\n5. Emitting assembly code from Assembly AST...");
-    let assembly_code = emitter::emit_assembly(asm_ast)?;
+    // --- 【STAGE 6: CODE EMISSION】 (Assembly AST -> Assembly Code String) ---
+    println!("\n6. Emitting assembly code from Assembly AST...");
+    let assembly_code = emitter::emit_assembly(asm_ast)?; // asm_ast 被消耗
     let assembly_path = parent_dir.join(file_stem).with_extension("s");
     fs::write(&assembly_path, &assembly_code)?;
     println!(
@@ -104,8 +124,8 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         assembly_path.display()
     );
 
-    // --- STAGE 6: ASSEMBLE & LINK ---
-    println!("\n6. Assembling and linking...");
+    // --- 【STAGE 7: ASSEMBLE & LINK】 ---
+    println!("\n7. Assembling and linking...");
     let output_path = parent_dir.join(file_stem);
     assemble(&assembly_path, &output_path)?;
     println!(
@@ -125,7 +145,7 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// --- Helper Functions for external commands ---
+// --- Helper Functions for external commands (不变) ---
 
 fn run_command(command: &mut Command) -> Result<(), Box<dyn std::error::Error>> {
     let status = command.status()?;
