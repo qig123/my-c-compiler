@@ -12,6 +12,15 @@ pub enum UnaryOperator {
     Complement, // ~ (ASDL: Complement)
     Negate,     // - (ASDL: Negate)
 }
+//binary_operator = Add | Subtract | Multiply | Divide | Remainder
+#[derive(Debug)]
+pub enum BinaryOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Remainder,
+}
 
 /// TACKY 中的一个值，可以是一个常量或一个临时变量。
 /// 对应 ASDL: val = Constant(int) | Var(identifier)
@@ -30,6 +39,12 @@ pub enum Instruction {
         op: UnaryOperator,
         src: Val,
         dst: Val, // 注意：在生成时，dst 必须是一个 Var
+    },
+    Binary {
+        op: BinaryOperator,
+        src1: Val,
+        src2: Val,
+        dst: Val,
     },
 }
 

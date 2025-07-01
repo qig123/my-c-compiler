@@ -32,6 +32,16 @@ impl TackyGenerator {
         }
     }
 
+    fn convert_binaryop(&self, op: &parser::BinaryOperator) -> tacky::BinaryOperator {
+        match op {
+            parser::BinaryOperator::Add => tacky::BinaryOperator::Add,
+            parser::BinaryOperator::Subtract => tacky::BinaryOperator::Subtract,
+            parser::BinaryOperator::Multiply => tacky::BinaryOperator::Multiply,
+            parser::BinaryOperator::Divide => tacky::BinaryOperator::Divide,
+            parser::BinaryOperator::Remainder => tacky::BinaryOperator::Remainder,
+        }
+    }
+
     /// 【核心】将一个表达式 AST 节点转换为 TACKY 指令列表。
     /// 这个函数有两个作用：
     /// 1. 将计算表达式所需的指令追加到 `instructions` 向量中。
@@ -72,9 +82,26 @@ impl TackyGenerator {
                 // 5. 返回代表结果的临时变量
                 Ok(dst)
             }
-            _ => {
-                return Err(format!("unsupport type",));
-            }
+            parser::Expression::Binary {
+                operator,
+                left,
+                right,
+            } => {
+                let src1 = self.generate_tacky_for_expression(left, instructions)?;
+                let src2 = self.generate_tacky_for_expression(right, instructions)?;
+                let dst_name = self.make_temporary();
+                let dst = tacky::Val::Var(dst_name);
+                let tacky_op = self.convert_binaryop(operator);
+                instructions.push(tacky::Instruction::Binary {
+                    op: tacky_op,
+                    src1: src1.clone(),
+                    src2: src2.clone(),
+                    dst: dst.clone(),
+                });
+                Ok(dst)
+            } // _ => {
+              //     return Err(format!("unsupport type",));
+              // }
         }
     }
 

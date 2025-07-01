@@ -63,6 +63,9 @@ impl AsmGenerator {
                         operand: self.convert_tacky_val(dst),
                     });
                 }
+                _ => {
+                    return Err(format!("unsupport type",));
+                }
             }
         }
 
