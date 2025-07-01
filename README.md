@@ -13,3 +13,4 @@ cargo run -- --lex tests/input.c
 
  ./target/debug/my_c_compiler -- --keep-asm tests/input.c
 
+ ../writing-a-c-compiler-tests/test_compiler ./target/debug/my_c_compiler --chapter 3 --stage lex

@@ -11,6 +11,10 @@ pub enum TokenType {
     Minus,      // -
     Tilde,      // ~
     Decrement,  // --
+    Add,        //+
+    Div,        // /
+    Mul,        //*
+    Remainder,  //
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
@@ -162,6 +166,22 @@ impl<'a> Lexer<'a> {
             '~' => {
                 self.chars.next();
                 Ok(TokenType::Tilde)
+            }
+            '+' => {
+                self.chars.next();
+                Ok(TokenType::Add)
+            }
+            '*' => {
+                self.chars.next();
+                Ok(TokenType::Mul)
+            }
+            '/' => {
+                self.chars.next();
+                Ok(TokenType::Div)
+            }
+            '%' => {
+                self.chars.next();
+                Ok(TokenType::Remainder)
             }
             '-' => {
                 // 1. 我们已经通过外层的 peek() 知道当前是 '-'
