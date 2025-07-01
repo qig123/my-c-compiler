@@ -22,9 +22,22 @@ pub enum Statement {
     Return(Expression),
 }
 
+/// 代表一个一元运算符的类型
+#[derive(Debug)]
+pub enum UnaryOperator {
+    Negation,          // 对应语义 "Negate"
+    BitwiseComplement, // 对应语义 "Complement"
+}
+
+/// 代表一个表达式
 #[derive(Debug)]
 pub enum Expression {
     Constant(i32),
+    // 它包含一个运算符和一个指向内部表达式的智能指针
+    Unary {
+        operator: UnaryOperator,
+        expression: Box<Expression>, // 使用 Box 来处理递归定义
+    },
 }
 
 // ... (AST 定义之后) ...
@@ -107,6 +120,7 @@ impl<'a> Parser<'a> {
     }
 
     // A more concise version for expect_integer_constant
+    #[allow(dead_code)]
     fn expect_integer_constant(&mut self) -> Result<i32, String> {
         if let Some(TokenType::IntegerConstant(value)) = self.peek().map(|t| t.token_type.clone()) {
             // `value` 是 i32，是 Copy 类型，所以这里是复制
@@ -151,9 +165,75 @@ impl<'a> Parser<'a> {
     }
 
     /// 解析一个表达式。
-    /// <exp> ::= <int>
+    /// <exp>        ::= <int>
+    //  |   <unop> <exp>
+    //  |   "(" <exp> ")
     fn parse_expression(&mut self) -> Result<Expression, String> {
-        let value = self.expect_integer_constant()?;
-        Ok(Expression::Constant(value))
+        // 查看下一个 token 来决定使用哪个产生式规则
+        let next_token = self
+            .peek()
+            .cloned()
+            .ok_or("Unexpected end of input while parsing expression.")?;
+        match &next_token.token_type {
+            // 规则 1: <exp> ::= <int>
+            TokenType::IntegerConstant(value) => {
+                // 消费掉这个 token
+                self.consume();
+                // 创建并返回 Constant 节点
+                Ok(Expression::Constant(*value))
+            }
+
+            // 规则 2: <exp> ::= <unop> <exp>
+            TokenType::Minus | TokenType::Tilde => {
+                // 1. 解析一元运算符
+                let operator = self.parse_unary_operator()?;
+
+                // 2. 递归地解析内部表达式
+                let inner_expression = self.parse_expression()?;
+
+                // 3. 构建并返回 Unary 节点
+                Ok(Expression::Unary {
+                    operator,
+                    expression: Box::new(inner_expression),
+                })
+            }
+
+            // 规则 3: <exp> ::= "(" <exp> ")"
+            TokenType::OpenParen => {
+                // 1. 消费掉左括号 '('
+                self.consume();
+
+                // 2. 递归地解析括号内的表达式
+                let inner_expression = self.parse_expression()?;
+
+                // 3. 期望并消费右括号 ')'
+                self.expect_token(TokenType::CloseParen)?;
+
+                // 4. 直接返回内部表达式的 AST 节点，忽略括号
+                Ok(inner_expression)
+            }
+
+            // 如果 token 不是一个表达式的开头，则报错
+            _ => Err(format!(
+                "Unexpected token {:?} on line {}: Expected an expression (integer, unary operator, or '(').",
+                next_token.token_type, next_token.line
+            )),
+        }
+    }
+    /// <unop> ::= "-" | "~"
+    fn parse_unary_operator(&mut self) -> Result<UnaryOperator, String> {
+        // 消费掉操作符 Token
+        if let Some(token) = self.consume() {
+            match token.token_type {
+                TokenType::Minus => Ok(UnaryOperator::Negation),
+                TokenType::Tilde => Ok(UnaryOperator::BitwiseComplement),
+                _ => Err(format!(
+                    "Expected unary operator, but found {:?} on line {}",
+                    token.token_type, token.line
+                )),
+            }
+        } else {
+            Err("Expected unary operator, but found end of input.".to_string())
+        }
     }
 }

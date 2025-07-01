@@ -67,6 +67,9 @@ impl CodeGenerator {
                             dst: Operand::Reg(RegisterKind::EAX), // 使用带类型的寄存器
                         });
                     }
+                    _ => {
+                        return Err(format!("unsupport type",));
+                    }
                 }
             }
         }
