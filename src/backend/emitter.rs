@@ -80,6 +80,9 @@ fn emit_function(output: &mut String, func: &Function) -> Result<(), std::fmt::E
                 writeln!(output, "    popq %rbp")?;
                 writeln!(output, "    ret")?;
             }
+            _ => {
+                panic!("test")
+            }
         }
     }
     Ok(())

@@ -1,30 +1,43 @@
-//  src/ir/assembly.rs
+// src/ir/assembly.rs
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Register {
-    AX, // 代表 EAX/RAX
+    AX,
     DX,
-    R10, // 代表 R10D/R10
+    R10,
     R11,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOperator {
-    Neg, // neg
-    Not, // not
+    Neg,
+    Not,
 }
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOperator {
     Add,
     Subtract,
     Multiply,
 }
+
+// 【新增】条件码，用于 JmpCC 和 SetCC
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CondCode {
+    E,  // Equal
+    NE, // Not Equal
+    G,  // Greater
+    GE, // Greater or Equal
+    L,  // Less
+    LE, // Less or Equal
+}
+
 #[derive(Debug, Clone)]
 pub enum Operand {
     Imm(i32),
     Reg(Register),
-    Pseudo(String), // 伪寄存器，如 "tmp.0"
-    Stack(i32),     // 栈地址，如 -4, -8
+    Pseudo(String),
+    Stack(i32),
 }
 
 #[derive(Debug, Clone)]
@@ -42,12 +55,23 @@ pub enum Instruction {
         src: Operand,
         dst: Operand,
     },
-    AllocateStack {
-        bytes: u32,
+    // 【新增】比较指令
+    Cmp {
+        src1: Operand,
+        src2: Operand,
     },
+    // 【新增】IDIV 指令现在是独立的
     Idiv(Operand),
     Cdq,
     Ret,
+    // 【新增】跳转和标签指令
+    Jmp(String),              // 无条件跳转
+    JmpCC(CondCode, String),  // 条件跳转
+    SetCC(CondCode, Operand), // 条件置位
+    Label(String),            // 标签定义
+    AllocateStack {
+        bytes: u32,
+    }, // 这个从PASS 3移动到这里更合适
 }
 
 #[derive(Debug)]
