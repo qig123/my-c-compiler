@@ -1,52 +1,40 @@
-// src/main.rs
+//  src/main.rs
 
-use clap::Parser;
-use my_c_compiler::codegen::{AsmProgram, CodeGenerator};
+use clap::Parser as ClapParser;
+use my_c_compiler::codegen::CodeGenerator;
+use my_c_compiler::emitter;
 use my_c_compiler::lexer::{self, Token};
-use my_c_compiler::parser;
+use my_c_compiler::parser as CParser;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// A C compiler, written in Rust.
-#[derive(Parser, Debug)]
+#[derive(ClapParser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Stop after lexing and print tokens
+    // ... Cli 结构体定义不变 ...
     #[arg(long)]
     lex: bool,
-
-    /// Stop after parsing and print AST
     #[arg(long)]
     parse: bool,
-
-    /// Stop after assembly generation and print assembly
     #[arg(long)]
     codegen: bool,
-
-    /// The C source file to compile
     input_file: PathBuf,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. 解析参数
     let cli = Cli::parse();
-
-    // 2. 调用主流程函数，并处理其返回结果
     if let Err(e) = run_pipeline(&cli) {
-        // 如果 run_pipeline 返回错误，打印错误信息
         eprintln!("\nCompilation failed: {}", e);
-        // 并以非零状态码退出
         std::process::exit(1);
     }
-    return Ok(());
+    Ok(())
 }
 
-// 包含完整编译流程的主函数，它返回一个 Result。
 fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    // 1. STAGE 1: PREPROCESSING
+    // --- STAGE 1: PREPROCESSING ---
     println!("1. Preprocessing {}...", cli.input_file.display());
-    // ... 路径计算 ...
     let input_path = &cli.input_file;
     if !input_path.exists() {
         return Err(format!("Input file not found: {}", input_path.display()).into());
@@ -54,7 +42,6 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let file_stem = input_path.file_stem().ok_or("Invalid input file name")?;
     let parent_dir = input_path.parent().unwrap_or_else(|| Path::new("."));
     let preprocessed_path = parent_dir.join(file_stem).with_extension("i");
-
     preprocess(input_path, &preprocessed_path)?;
     println!(
         "   ✓ Preprocessing complete: {}",
@@ -62,68 +49,71 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     );
     let source_code = fs::read_to_string(&preprocessed_path)?;
 
-    // 2. STAGE 2: LEXING
+    // --- STAGE 2: LEXING ---
     println!("\n2. Lexing source code...");
     let lexer = lexer::Lexer::new(&source_code);
     let tokens: Vec<Token> = lexer.collect::<Result<_, _>>()?;
     println!("   ✓ Lexing successful, found {} tokens.", tokens.len());
-
-    // --lex 标志检查：在词法分析后窥视并退出
     if cli.lex {
-        println!("--- Generated Tokens ---");
-        for token in &tokens {
-            println!("  {:?}", token);
-        }
-        println!("------------------------");
+        println!(
+            "--- Generated Tokens ---\n{:#?}\n------------------------",
+            tokens
+        );
         println!("\nHalting as requested by --lex.");
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
 
-    println!("\n3. Parsing tokens...");
-    let mut parser = parser::Parser::new(&tokens);
-    let ast = parser.parse()?; // 调用解析器
+    // --- STAGE 3: PARSING (C -> C AST) ---
+    println!("\n3. Parsing tokens into C Abstract Syntax Tree (AST)...");
+    let mut parser = CParser::Parser::new(&tokens);
+    let c_ast = parser.parse()?;
     println!("   ✓ Parsing successful.");
-
-    // --parse 标志检查：在解析后窥视并退出
     if cli.parse {
-        println!("--- Generated AST ---");
-        println!("{:#?}", ast);
-        println!("---------------------");
+        println!(
+            "--- Generated C AST ---\n{:#?}\n---------------------",
+            c_ast
+        );
         println!("\nHalting as requested by --parse.");
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
-    println!("\n3. Parsing Ast...");
-    let ass_parser = CodeGenerator::new(ast);
-    let ass_ast = ass_parser.generate()?;
-    println!("   ✓ Parsing Assemble  successful.");
+
+    // --- STAGE 4: CODE GENERATION (C AST -> Assembly AST) ---
+    println!("\n4. Generating Assembly AST from C AST...");
+    let codegen = CodeGenerator::new(c_ast);
+    let asm_ast = codegen.generate()?;
+    println!("   ✓ Assembly AST generation successful.");
     if cli.codegen {
-        println!("--- Generated  Assemble AST ---");
-        println!("{:#?}", ass_ast);
-        println!("---------------------");
-        println!("\nHalting as requested by --assemble parse.");
+        println!(
+            "--- Generated Assembly AST ---\n{:#?}\n--------------------------",
+            asm_ast
+        );
+        println!("\nHalting as requested by --codegen.");
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
 
-    let assembly_code = compile_to_assembly(ass_ast)?;
-
+    // --- STAGE 5: CODE EMISSION (Assembly AST -> Assembly Code String) ---
+    println!("\n5. Emitting assembly code from Assembly AST...");
+    let assembly_code = emitter::emit_assembly(asm_ast)?;
     let assembly_path = parent_dir.join(file_stem).with_extension("s");
-    fs::write(&assembly_path, &assembly_code)?; // <-- 将 assembly_code 写入文件
-    println!("   ✓ Compilation complete: {}", assembly_path.display());
+    fs::write(&assembly_path, &assembly_code)?;
+    println!(
+        "   ✓ Assembly code emission complete: {}",
+        assembly_path.display()
+    );
 
-    // 5. STAGE 5: ASSEMBLE & LINK
-    println!("\n5. Assembling and linking...");
+    // --- STAGE 6: ASSEMBLE & LINK ---
+    println!("\n6. Assembling and linking...");
     let output_path = parent_dir.join(file_stem);
-    // 现在 assemble 调用是有效的，因为它操作的是一个刚刚被创建的 .s 文件
     assemble(&assembly_path, &output_path)?;
     println!(
         "   ✓ Assembling and linking complete: {}",
         output_path.display()
     );
 
-    // --- 成功时的清理 ---
+    // --- Cleanup ---
     fs::remove_file(&preprocessed_path)?;
     fs::remove_file(&assembly_path)?;
 
@@ -135,44 +125,32 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// --- Helper Functions ---
+// --- Helper Functions for external commands ---
 
-/// Runs an external command and checks for errors.
 fn run_command(command: &mut Command) -> Result<(), Box<dyn std::error::Error>> {
     let status = command.status()?;
-
     if !status.success() {
         return Err(format!("Command `{:?}` failed with status: {}", command, status).into());
     }
     Ok(())
 }
 
-/// Stage 1: Call `gcc` to preprocess the C source file.
 fn preprocess(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::new("gcc");
-    cmd.arg("-E").arg(input).arg("-o").arg(output);
-
-    run_command(&mut cmd)
+    run_command(
+        Command::new("gcc")
+            .arg("-E")
+            .arg(input)
+            .arg("-o")
+            .arg(output),
+    )
 }
 
-/// Stage 3: Call `gcc` to assemble and link the assembly file into an executable.
 fn assemble(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::new("gcc");
-    cmd.arg(input).arg("-o").arg(output);
-
-    run_command(&mut cmd)
-}
-
-/// The main compilation function. Takes an AST and will eventually generate code.
-fn compile_to_assembly(ast: AsmProgram) -> Result<String, Box<dyn std::error::Error>> {
-    println!("   -> (Stub) Generating assembly from AST...");
-    println!("   -> Compiling function '{}'", ast.function.name);
-    // 目前，我们仍然返回硬编码的汇编代码
-    let assembly_code = r#"
-.globl main
-main:
-  movl $2, %eax
-  ret
-"#;
-    Ok(assembly_code.to_string())
+    run_command(
+        Command::new("gcc")
+            .arg("-no-pie")
+            .arg(input)
+            .arg("-o")
+            .arg(output),
+    )
 }
