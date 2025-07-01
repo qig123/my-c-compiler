@@ -15,15 +15,16 @@ pub enum TokenType {
     Asterisk,   // * (【修改】)
     Slash,      // / (【修改】)
     Percent,    // % (【修改】)
-    Bang,       // !
-    And,
-    Or,
-    EqualEqual, // ==
-    BangEqual,
-    Less,    // <
-    Greater, // >
-    LessEqual,
-    GreaterEqual,
+    // --- 第 4 章新增/修改的 Token ---
+    Not,          // ! (从 Bang 修改)
+    And,          // &&
+    Or,           // ||
+    Equal,        // == (从 EqualEqual 修改)
+    NotEqual,     // != (从 BangEqual 修改)
+    Less,         // <
+    LessEqual,    // <=
+    Greater,      // >
+    GreaterEqual, // >=
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
@@ -230,9 +231,9 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 if self.chars.peek() == Some(&'=') {
                     self.chars.next();
-                    Ok(TokenType::BangEqual)
+                    Ok(TokenType::NotEqual)
                 } else {
-                    Ok(TokenType::Bang)
+                    Ok(TokenType::Not)
                 }
             }
             '<' => {
@@ -257,7 +258,7 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 if self.chars.peek() == Some(&'=') {
                     self.chars.next();
-                    Ok(TokenType::EqualEqual)
+                    Ok(TokenType::Equal)
                 } else {
                     Err(format!(
                         "Unrecognized character '{}' on line {}",

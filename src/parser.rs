@@ -25,9 +25,9 @@ pub enum Statement {
 /// 代表一个一元运算符的类型
 #[derive(Debug)]
 pub enum UnaryOperator {
-    Negation,          // 对应语义 "Negate"
-    BitwiseComplement, // 对应语义 "Complement"
-    Bang,
+    Negate,     // - (从 Negation 修改)
+    Complement, // ~ (从 BitwiseComplement 修改)
+    Not,        // ! (从 Bang 修改)
 }
 #[derive(Debug)]
 pub enum BinaryOperator {
@@ -36,14 +36,14 @@ pub enum BinaryOperator {
     Multiply, // 使用完整单词
     Divide,   // 使用完整单词
     Remainder,
-    Or,
-    And,
-    EqualEqual,
-    BangEqual,
-    LessEqual,
-    Less,
-    Greater,
-    GreaterEqual,
+    And,            // &&
+    Or,             // ||
+    Equal,          // == (从 EqualEqual 修改)
+    NotEqual,       // != (从 BangEqual 修改)
+    LessThan,       // <  (从 Less 修改)
+    LessOrEqual,    // <=
+    GreaterThan,    // >  (从 Greater 修改)
+    GreaterOrEqual, // >=
 }
 
 /// 代表一个表达式
@@ -161,19 +161,26 @@ impl<'a> Parser<'a> {
     // 获取 Token 对应的二元运算符和优先级 ---
     fn get_binary_operator_precedence(token_type: &TokenType) -> Option<(BinaryOperator, u8)> {
         match token_type {
+            // 算术运算符
             TokenType::Plus => Some((BinaryOperator::Add, 45)),
             TokenType::Minus => Some((BinaryOperator::Subtract, 45)),
             TokenType::Asterisk => Some((BinaryOperator::Multiply, 50)),
             TokenType::Slash => Some((BinaryOperator::Divide, 50)),
             TokenType::Percent => Some((BinaryOperator::Remainder, 50)),
-            TokenType::Less => Some((BinaryOperator::Less, 35)),
-            TokenType::LessEqual => Some((BinaryOperator::LessEqual, 35)),
-            TokenType::Greater => Some((BinaryOperator::Greater, 35)),
-            TokenType::GreaterEqual => Some((BinaryOperator::GreaterEqual, 35)),
-            TokenType::EqualEqual => Some((BinaryOperator::EqualEqual, 30)),
-            TokenType::BangEqual => Some((BinaryOperator::BangEqual, 30)),
-            TokenType::And => Some((BinaryOperator::Add, 10)),
-            TokenType::Or => Some((BinaryOperator::Add, 5)),
+
+            // 关系运算符
+            TokenType::Less => Some((BinaryOperator::LessThan, 35)),
+            TokenType::LessEqual => Some((BinaryOperator::LessOrEqual, 35)),
+            TokenType::Greater => Some((BinaryOperator::GreaterThan, 35)),
+            TokenType::GreaterEqual => Some((BinaryOperator::GreaterOrEqual, 35)),
+
+            // 相等运算符
+            TokenType::Equal => Some((BinaryOperator::Equal, 30)),
+            TokenType::NotEqual => Some((BinaryOperator::NotEqual, 30)),
+
+            // 逻辑运算符
+            TokenType::And => Some((BinaryOperator::And, 10)), // 修正 Bug (之前是 Add)
+            TokenType::Or => Some((BinaryOperator::Or, 5)),    // 修正 Bug (之前是 Add)
             _ => None,
         }
     }
@@ -257,7 +264,7 @@ impl<'a> Parser<'a> {
                 Ok(Expression::Constant(*val))
             }
             // <factor> ::= <unop> <factor>
-            TokenType::Minus | TokenType::Tilde | TokenType::Bang => {
+            TokenType::Minus | TokenType::Tilde | TokenType::Not => {
                 let operator = self.parse_unary_operator()?;
                 // 递归调用 parse_factor，而不是 parse_expression
                 let expression = self.parse_factor()?;
@@ -282,12 +289,11 @@ impl<'a> Parser<'a> {
     }
     /// <unop> ::= "-" | "~" | "!"
     fn parse_unary_operator(&mut self) -> Result<UnaryOperator, String> {
-        // 消费掉操作符 Token
         if let Some(token) = self.consume() {
             match token.token_type {
-                TokenType::Minus => Ok(UnaryOperator::Negation),
-                TokenType::Tilde => Ok(UnaryOperator::BitwiseComplement),
-                TokenType::Bang => Ok(UnaryOperator::Bang),
+                TokenType::Minus => Ok(UnaryOperator::Negate), // 修改
+                TokenType::Tilde => Ok(UnaryOperator::Complement), // 修改
+                TokenType::Not => Ok(UnaryOperator::Not),      // 修改
                 _ => Err(format!(
                     "Expected unary operator, but found {:?} on line {}",
                     token.token_type, token.line

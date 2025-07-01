@@ -53,6 +53,9 @@ impl AsmGenerator {
                     let asm_op = match op {
                         tacky::UnaryOperator::Complement => assembly::UnaryOperator::Not,
                         tacky::UnaryOperator::Negate => assembly::UnaryOperator::Neg,
+                        _ => {
+                            panic!("test")
+                        }
                     };
                     instructions.push(assembly::Instruction::Mov {
                         src: self.convert_tacky_val(src),
@@ -133,6 +136,9 @@ impl AsmGenerator {
                             });
                         }
                     }
+                }
+                _ => {
+                    panic!("test")
                 }
             }
         }

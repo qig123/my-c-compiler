@@ -8,12 +8,17 @@ use crate::parser;
 pub struct TackyGenerator {
     /// 用于生成唯一临时变量名的计数器。
     temp_counter: usize,
+    /// 【新增】用于生成唯一标签名的计数器。
+    label_counter: usize,
 }
 
 impl TackyGenerator {
     /// 创建一个新的 TackyGenerator 实例。
     pub fn new() -> Self {
-        TackyGenerator { temp_counter: 0 }
+        TackyGenerator {
+            temp_counter: 0,
+            label_counter: 0, // 【新增】初始化标签计数器
+        }
     }
 
     /// 生成一个唯一的临时变量名，例如 "tmp.0", "tmp.1"。
@@ -23,130 +28,233 @@ impl TackyGenerator {
         name
     }
 
+    /// 【新增】生成一个唯一的标签名，例如 "_L0", "_L1"。
+    /// 使用下划线和字母开头，确保是合法的汇编标签。
+    fn make_label(&mut self) -> String {
+        let label = format!("_L{}", self.label_counter);
+        self.label_counter += 1;
+        label
+    }
+
     /// 将 parser AST 中的 UnaryOperator 转换为 tacky IR 中的 UnaryOperator。
-    /// 这是一个简单的 1:1 映射。
     fn convert_unop(&self, op: &parser::UnaryOperator) -> tacky::UnaryOperator {
         match op {
-            parser::UnaryOperator::Negation => tacky::UnaryOperator::Negate,
-            parser::UnaryOperator::BitwiseComplement => tacky::UnaryOperator::Complement,
-            _ => {
-                panic!("unsurrot")
-            }
+            parser::UnaryOperator::Negate => tacky::UnaryOperator::Negate,
+            parser::UnaryOperator::Complement => tacky::UnaryOperator::Complement,
+            parser::UnaryOperator::Not => tacky::UnaryOperator::Not,
         }
     }
 
-    fn convert_binaryop(&self, op: &parser::BinaryOperator) -> tacky::BinaryOperator {
+    /// 【修改】将 parser AST 中的 BinaryOperator 转换为 tacky IR 中的 BinaryOperator。
+    /// 注意：这个函数只处理非短路的二元运算符。
+    fn convert_binaryop(
+        &self,
+        op: &parser::BinaryOperator,
+    ) -> Result<tacky::BinaryOperator, String> {
         match op {
-            parser::BinaryOperator::Add => tacky::BinaryOperator::Add,
-            parser::BinaryOperator::Subtract => tacky::BinaryOperator::Subtract,
-            parser::BinaryOperator::Multiply => tacky::BinaryOperator::Multiply,
-            parser::BinaryOperator::Divide => tacky::BinaryOperator::Divide,
-            parser::BinaryOperator::Remainder => tacky::BinaryOperator::Remainder,
-            _ => {
-                panic!("unsurrot")
-            }
+            parser::BinaryOperator::Add => Ok(tacky::BinaryOperator::Add),
+            parser::BinaryOperator::Subtract => Ok(tacky::BinaryOperator::Subtract),
+            parser::BinaryOperator::Multiply => Ok(tacky::BinaryOperator::Multiply),
+            parser::BinaryOperator::Divide => Ok(tacky::BinaryOperator::Divide),
+            parser::BinaryOperator::Remainder => Ok(tacky::BinaryOperator::Remainder),
+            // 新增的关系运算符
+            parser::BinaryOperator::Equal => Ok(tacky::BinaryOperator::Equal),
+            parser::BinaryOperator::NotEqual => Ok(tacky::BinaryOperator::NotEqual),
+            parser::BinaryOperator::LessThan => Ok(tacky::BinaryOperator::LessThan),
+            parser::BinaryOperator::LessOrEqual => Ok(tacky::BinaryOperator::LessOrEqual),
+            parser::BinaryOperator::GreaterThan => Ok(tacky::BinaryOperator::GreaterThan),
+            parser::BinaryOperator::GreaterOrEqual => Ok(tacky::BinaryOperator::GreaterEqual),
+            // And 和 Or 是特殊情况，不应通过此函数处理
+            parser::BinaryOperator::And | parser::BinaryOperator::Or => Err(
+                "Logical AND/OR should be handled separately and not converted directly."
+                    .to_string(),
+            ),
         }
     }
 
-    /// 【核心】将一个表达式 AST 节点转换为 TACKY 指令列表。
-    /// 这个函数有两个作用：
-    /// 1. 将计算表达式所需的指令追加到 `instructions` 向量中。
-    /// 2. 返回一个 `tacky::Val`，代表这个表达式最终计算结果存放的位置。
+    /// 【核心修改】将一个表达式 AST 节点转换为 TACKY 指令列表。
     fn generate_tacky_for_expression(
         &mut self,
         exp: &parser::Expression,
         instructions: &mut Vec<tacky::Instruction>,
     ) -> Result<tacky::Val, String> {
         match exp {
-            // 规则 1: 常量表达式
-            // - 不产生新指令。
-            // - 直接返回一个 tacky::Val::Constant。
             parser::Expression::Constant(i) => Ok(tacky::Val::Constant(*i)),
-
-            // 规则 2: 一元运算表达式
             parser::Expression::Unary {
                 operator,
                 expression,
             } => {
-                // 1. 递归处理内部表达式，获取其结果存放的位置 (src)
                 let src = self.generate_tacky_for_expression(expression, instructions)?;
-
-                // 2. 为本次运算的结果创建一个新的临时变量 (dst)
                 let dst_name = self.make_temporary();
                 let dst = tacky::Val::Var(dst_name);
-
-                // 3. 转换运算符
                 let tacky_op = self.convert_unop(operator);
-
-                // 4. 创建并追加 Unary 指令
                 instructions.push(tacky::Instruction::Unary {
                     op: tacky_op,
-                    src: src.clone(), // src 可能在别处还需要用，这里 clone
-                    dst: dst.clone(), // dst 作为返回值，这里也 clone
+                    src: src.clone(),
+                    dst: dst.clone(),
                 });
-
-                // 5. 返回代表结果的临时变量
                 Ok(dst)
             }
+            // 【修改】对二元运算符进行分支处理
             parser::Expression::Binary {
                 operator,
                 left,
                 right,
             } => {
-                let src1 = self.generate_tacky_for_expression(left, instructions)?;
-                let src2 = self.generate_tacky_for_expression(right, instructions)?;
-                let dst_name = self.make_temporary();
-                let dst = tacky::Val::Var(dst_name);
-                let tacky_op = self.convert_binaryop(operator);
-                instructions.push(tacky::Instruction::Binary {
-                    op: tacky_op,
-                    src1: src1.clone(),
-                    src2: src2.clone(),
-                    dst: dst.clone(),
-                });
-                Ok(dst)
-            } // _ => {
-              //     return Err(format!("unsupport type",));
-              // }
+                match operator {
+                    // --- Case 1: 逻辑与 (&&) ---
+                    parser::BinaryOperator::And => {
+                        // 创建最终存放结果的临时变量
+                        let result_var_name = self.make_temporary();
+                        let result_var = tacky::Val::Var(result_var_name);
+
+                        // 创建两个需要的标签
+                        let false_label = self.make_label();
+                        let end_label = self.make_label();
+
+                        // 1. 计算左侧表达式 e1
+                        let v1 = self.generate_tacky_for_expression(left, instructions)?;
+                        // 2. 如果 e1 为 0，短路，跳转到 false 分支
+                        instructions.push(tacky::Instruction::JumpIfZero {
+                            condition: v1,
+                            target: false_label.clone(),
+                        });
+
+                        // 3. 计算右侧表达式 e2
+                        let v2 = self.generate_tacky_for_expression(right, instructions)?;
+                        // 4. 如果 e2 为 0，跳转到 false 分支
+                        instructions.push(tacky::Instruction::JumpIfZero {
+                            condition: v2,
+                            target: false_label.clone(),
+                        });
+
+                        // 5. (True 分支) 如果代码执行到这里，说明 e1 和 e2 都非 0
+                        instructions.push(tacky::Instruction::Copy {
+                            src: tacky::Val::Constant(1),
+                            dst: result_var.clone(),
+                        });
+                        // 6. 跳转到表达式末尾，跳过 false 分支的代码
+                        instructions.push(tacky::Instruction::Jump(end_label.clone()));
+
+                        // 7. (False 分支)
+                        instructions.push(tacky::Instruction::Label(false_label));
+                        instructions.push(tacky::Instruction::Copy {
+                            src: tacky::Val::Constant(0),
+                            dst: result_var.clone(),
+                        });
+
+                        // 8. 表达式结束的标签
+                        instructions.push(tacky::Instruction::Label(end_label));
+
+                        Ok(result_var)
+                    }
+
+                    // --- Case 2: 逻辑或 (||) ---
+                    // 这个逻辑留给你自己实现，但结构与 && 非常相似
+                    parser::BinaryOperator::Or => {
+                        let result_var_name = self.make_temporary();
+                        let result_var = tacky::Val::Var(result_var_name);
+
+                        let true_label = self.make_label();
+                        let end_label = self.make_label();
+
+                        // 1. 计算 e1
+                        let v1 = self.generate_tacky_for_expression(left, instructions)?;
+                        // 2. 如果 e1 非 0，短路，跳转到 true 分支
+                        instructions.push(tacky::Instruction::JumpIfNotZero {
+                            condition: v1,
+                            target: true_label.clone(),
+                        });
+
+                        // 3. 计算 e2
+                        let v2 = self.generate_tacky_for_expression(right, instructions)?;
+                        // 4. 如果 e2 非 0，跳转到 true 分支
+                        instructions.push(tacky::Instruction::JumpIfNotZero {
+                            condition: v2,
+                            target: true_label.clone(),
+                        });
+
+                        // 5. (False 分支) 如果代码执行到这里，说明 e1 和 e2 都为 0
+                        instructions.push(tacky::Instruction::Copy {
+                            src: tacky::Val::Constant(0),
+                            dst: result_var.clone(),
+                        });
+                        instructions.push(tacky::Instruction::Jump(end_label.clone()));
+
+                        // 6. (True 分支)
+                        instructions.push(tacky::Instruction::Label(true_label));
+                        instructions.push(tacky::Instruction::Copy {
+                            src: tacky::Val::Constant(1),
+                            dst: result_var.clone(),
+                        });
+
+                        // 7. 表达式结束的标签
+                        instructions.push(tacky::Instruction::Label(end_label));
+
+                        Ok(result_var)
+                    }
+
+                    // --- Case 3: 其他所有标准二元运算符 ---
+                    _ => {
+                        // 递归处理左右子表达式
+                        let src1 = self.generate_tacky_for_expression(left, instructions)?;
+                        let src2 = self.generate_tacky_for_expression(right, instructions)?;
+
+                        // 为结果创建临时变量
+                        let dst_name = self.make_temporary();
+                        let dst = tacky::Val::Var(dst_name);
+
+                        // 转换运算符
+                        let tacky_op = self.convert_binaryop(operator)?;
+
+                        // 生成 Binary 指令
+                        instructions.push(tacky::Instruction::Binary {
+                            op: tacky_op,
+                            src1: src1.clone(),
+                            src2: src2.clone(),
+                            dst: dst.clone(),
+                        });
+
+                        Ok(dst)
+                    }
+                }
+            }
         }
     }
 
-    /// 将一个语句 AST 节点转换为 TACKY 指令。
+    /// 将一个语句 AST 节点转换为 TACKY 指令。 (无需修改)
     fn generate_tacky_for_statement(
         &mut self,
         stmt: &parser::Statement,
         instructions: &mut Vec<tacky::Instruction>,
     ) -> Result<(), String> {
+        // ... (保持不变)
         match stmt {
             parser::Statement::Return(exp) => {
-                // 1. 处理 return 语句中的表达式，获取其结果
                 let return_val = self.generate_tacky_for_expression(exp, instructions)?;
-
-                // 2. 创建并追加 Return 指令
                 instructions.push(tacky::Instruction::Return(return_val));
                 Ok(())
             }
         }
     }
 
-    /// 将一个函数 AST 节点转换为 TACKY 函数。
+    /// 将一个函数 AST 节点转换为 TACKY 函数。 (无需修改)
     fn generate_tacky_for_function(
         &mut self,
         func: &parser::Function,
     ) -> Result<tacky::Function, String> {
+        // ... (保持不变)
         let mut instructions = Vec::new();
-
-        // 处理函数体（目前只有一个语句）
         self.generate_tacky_for_statement(&func.body, &mut instructions)?;
-
         Ok(tacky::Function {
             name: func.name.clone(),
             body: instructions,
         })
     }
 
-    /// 主入口：将整个 C 程序 AST 转换为 TACKY 程序。
+    /// 主入口：将整个 C 程序 AST 转换为 TACKY 程序。 (无需修改)
     pub fn generate_tacky(&mut self, c_ast: parser::Program) -> Result<tacky::Program, String> {
+        // ... (保持不变)
         let tacky_function = self.generate_tacky_for_function(&c_ast.function)?;
         Ok(tacky::Program {
             function: tacky_function,
