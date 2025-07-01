@@ -1,6 +1,7 @@
 // src/main.rs
 
 use clap::Parser;
+use my_c_compiler::codegen::{AsmProgram, CodeGenerator};
 use my_c_compiler::lexer::{self, Token};
 use my_c_compiler::parser;
 use std::fs;
@@ -87,21 +88,27 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // --parse 标志检查：在解析后窥视并退出
     if cli.parse {
         println!("--- Generated AST ---");
-        // 使用 {:#?} "pretty-print" 格式化输出 AST
         println!("{:#?}", ast);
         println!("---------------------");
         println!("\nHalting as requested by --parse.");
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
+    println!("\n3. Parsing Ast...");
+    let ass_parser = CodeGenerator::new(ast);
+    let ass_ast = ass_parser.generate()?;
+    println!("   ✓ Parsing Assemble  successful.");
+    if cli.codegen {
+        println!("--- Generated  Assemble AST ---");
+        println!("{:#?}", ass_ast);
+        println!("---------------------");
+        println!("\nHalting as requested by --assemble parse.");
+        fs::remove_file(&preprocessed_path)?;
+        return Ok(());
+    }
 
-    // 4. STAGE 4: COMPILE TO ASSEMBLY (之前叫 STAGE 3)
-    println!("\n4. Compiling (codegen)...");
+    let assembly_code = compile_to_assembly(ass_ast)?;
 
-    // **修正 1: 将 ast 传递给 compile_to_assembly**
-    let assembly_code = compile_to_assembly(ast)?;
-
-    // **修正 2: 重新加入写入文件的关键步骤**
     let assembly_path = parent_dir.join(file_stem).with_extension("s");
     fs::write(&assembly_path, &assembly_code)?; // <-- 将 assembly_code 写入文件
     println!("   ✓ Compilation complete: {}", assembly_path.display());
@@ -156,16 +163,10 @@ fn assemble(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error
     run_command(&mut cmd)
 }
 
-// *** 修正 3: 恢复 compile_to_assembly 的正确签名！ ***
 /// The main compilation function. Takes an AST and will eventually generate code.
-fn compile_to_assembly(ast: parser::Program) -> Result<String, Box<dyn std::error::Error>> {
+fn compile_to_assembly(ast: AsmProgram) -> Result<String, Box<dyn std::error::Error>> {
     println!("   -> (Stub) Generating assembly from AST...");
-    // 我们可以从 AST 中提取信息来进行下一步
     println!("   -> Compiling function '{}'", ast.function.name);
-
-    // 将来，我们会遍历 AST 来生成真正的代码
-    // let assembly_code = codegen(ast)?;
-
     // 目前，我们仍然返回硬编码的汇编代码
     let assembly_code = r#"
 .globl main
