@@ -15,6 +15,15 @@ pub enum TokenType {
     Asterisk,   // * (【修改】)
     Slash,      // / (【修改】)
     Percent,    // % (【修改】)
+    Bang,       // !
+    And,
+    Or,
+    EqualEqual, // ==
+    BangEqual,
+    Less,    // <
+    Greater, // >
+    LessEqual,
+    GreaterEqual,
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
@@ -183,18 +192,77 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(TokenType::Percent)
             }
+
             '-' => {
-                // 1. 我们已经通过外层的 peek() 知道当前是 '-'
-                self.chars.next(); // 消耗掉第一个 '-'
-                // 2. 再次使用 peek() 来“向前看”一个字符，这就是 peek_next 的效果
+                self.chars.next();
                 if self.chars.peek() == Some(&'-') {
-                    // 如果下一个字符也是 '-'
-                    self.chars.next(); // 消耗掉第二个 '-'
+                    self.chars.next();
                     Ok(TokenType::Decrement)
                 } else {
-                    // 如果下一个字符不是 '-' (或者是 None)
-                    // 那么它只是一个单独的减号
                     Ok(TokenType::Minus)
+                }
+            }
+            '&' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'&') {
+                    self.chars.next();
+                    Ok(TokenType::And)
+                } else {
+                    Err(format!(
+                        "Unrecognized character '{}' on line {}",
+                        c, self.line
+                    ))
+                }
+            }
+            '|' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'|') {
+                    self.chars.next();
+                    Ok(TokenType::Or)
+                } else {
+                    Err(format!(
+                        "Unrecognized character '{}' on line {}",
+                        c, self.line
+                    ))
+                }
+            }
+            '!' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'=') {
+                    self.chars.next();
+                    Ok(TokenType::BangEqual)
+                } else {
+                    Ok(TokenType::Bang)
+                }
+            }
+            '<' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'=') {
+                    self.chars.next();
+                    Ok(TokenType::LessEqual)
+                } else {
+                    Ok(TokenType::Less)
+                }
+            }
+            '>' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'=') {
+                    self.chars.next();
+                    Ok(TokenType::GreaterEqual)
+                } else {
+                    Ok(TokenType::Greater)
+                }
+            }
+            '=' => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'=') {
+                    self.chars.next();
+                    Ok(TokenType::EqualEqual)
+                } else {
+                    Err(format!(
+                        "Unrecognized character '{}' on line {}",
+                        c, self.line
+                    ))
                 }
             }
             'a'..='z' | 'A'..='Z' | '_' => Ok(self.lex_identifier_or_keyword()),
