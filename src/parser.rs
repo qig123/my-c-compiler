@@ -28,6 +28,14 @@ pub enum UnaryOperator {
     Negation,          // 对应语义 "Negate"
     BitwiseComplement, // 对应语义 "Complement"
 }
+#[derive(Debug)]
+pub enum BinaryOperator {
+    Add,
+    Subtract, // 使用完整单词
+    Multiply, // 使用完整单词
+    Divide,   // 使用完整单词
+    Remainder,
+}
 
 /// 代表一个表达式
 #[derive(Debug)]
@@ -37,6 +45,11 @@ pub enum Expression {
     Unary {
         operator: UnaryOperator,
         expression: Box<Expression>, // 使用 Box 来处理递归定义
+    },
+    Binary {
+        operator: BinaryOperator,
+        left: Box<Expression>,
+        right: Box<Expression>,
     },
 }
 
@@ -136,6 +149,17 @@ impl<'a> Parser<'a> {
             found_token.map_or(0, |t| t.line)
         ))
     }
+    // 获取 Token 对应的二元运算符和优先级 ---
+    fn get_binary_operator_precedence(token_type: &TokenType) -> Option<(BinaryOperator, u8)> {
+        match token_type {
+            TokenType::Plus => Some((BinaryOperator::Add, 45)),
+            TokenType::Minus => Some((BinaryOperator::Subtract, 45)),
+            TokenType::Asterisk => Some((BinaryOperator::Multiply, 50)),
+            TokenType::Slash => Some((BinaryOperator::Divide, 50)),
+            TokenType::Percent => Some((BinaryOperator::Remainder, 50)),
+            _ => None,
+        }
+    }
 
     // --- Recursive Descent Parsing Methods ---
 
@@ -158,65 +182,84 @@ impl<'a> Parser<'a> {
     /// <statement> ::= "return" <exp> ";"
     fn parse_statement(&mut self) -> Result<Statement, String> {
         self.expect_token(TokenType::KeywordReturn)?;
-        let expression = self.parse_expression()?;
+        let expression = self.parse_expression(0)?;
         self.expect_token(TokenType::Semicolon)?;
 
         Ok(Statement::Return(expression))
     }
 
-    /// 解析一个表达式。
-    /// <exp>        ::= <int>
-    //  |   <unop> <exp>
-    //  |   "(" <exp> ")
-    fn parse_expression(&mut self) -> Result<Expression, String> {
-        // 查看下一个 token 来决定使用哪个产生式规则
+    /// 【核心】使用优先级爬升法解析表达式。
+    /// <exp> ::= <factor> { <binop> <exp> }
+    fn parse_expression(&mut self, min_precedence: u8) -> Result<Expression, String> {
+        // 表达式的左侧总是一个 factor
+        let mut left = self.parse_factor()?;
+        // 循环处理后续的 binop + exp
+        while let Some(next_token) = self.peek() {
+            // 检查下一个 token 是否是优先级足够的二元运算符
+            if let Some((op, precedence)) =
+                Self::get_binary_operator_precedence(&next_token.token_type)
+            {
+                if precedence >= min_precedence {
+                    // 消费掉这个运算符
+                    self.consume();
+
+                    // 递归调用 parse_expression 来解析右侧
+                    // 注意：右侧的最低优先级要比当前运算符高 1 (或更高，取决于结合性)
+                    // 对于左结合，precedence + 1 是正确的
+                    let right = self.parse_expression(precedence + 1)?;
+
+                    // 将左右两边组合成一个新的 left
+                    left = Expression::Binary {
+                        operator: op,
+                        left: Box::new(left),
+                        right: Box::new(right),
+                    };
+                } else {
+                    // 优先级不够，跳出循环
+                    break;
+                }
+            } else {
+                // 不是二元运算符，跳出循环
+                break;
+            }
+        }
+
+        Ok(left)
+    }
+    /// <factor> ::= <int> | <unop> <factor> | "(" <exp> ")"
+    fn parse_factor(&mut self) -> Result<Expression, String> {
         let next_token = self
             .peek()
             .cloned()
-            .ok_or("Unexpected end of input while parsing expression.")?;
+            .ok_or_else(|| "Unexpected end of input, expected a factor.".to_string())?;
+
         match &next_token.token_type {
-            // 规则 1: <exp> ::= <int>
-            TokenType::IntegerConstant(value) => {
-                // 消费掉这个 token
+            // <factor> ::= <int>
+            TokenType::IntegerConstant(val) => {
                 self.consume();
-                // 创建并返回 Constant 节点
-                Ok(Expression::Constant(*value))
+                Ok(Expression::Constant(*val))
             }
-
-            // 规则 2: <exp> ::= <unop> <exp>
+            // <factor> ::= <unop> <factor>
             TokenType::Minus | TokenType::Tilde => {
-                // 1. 解析一元运算符
                 let operator = self.parse_unary_operator()?;
-
-                // 2. 递归地解析内部表达式
-                let inner_expression = self.parse_expression()?;
-
-                // 3. 构建并返回 Unary 节点
+                // 递归调用 parse_factor，而不是 parse_expression
+                let expression = self.parse_factor()?;
                 Ok(Expression::Unary {
                     operator,
-                    expression: Box::new(inner_expression),
+                    expression: Box::new(expression),
                 })
             }
-
-            // 规则 3: <exp> ::= "(" <exp> ")"
+            // <factor> ::= "(" <exp> ")"
             TokenType::OpenParen => {
-                // 1. 消费掉左括号 '('
                 self.consume();
-
-                // 2. 递归地解析括号内的表达式
-                let inner_expression = self.parse_expression()?;
-
-                // 3. 期望并消费右括号 ')'
+                // 括号内部是一个完整的表达式，所以调用 parse_expression
+                let inner_expression = self.parse_expression(0)?;
                 self.expect_token(TokenType::CloseParen)?;
-
-                // 4. 直接返回内部表达式的 AST 节点，忽略括号
                 Ok(inner_expression)
             }
-
-            // 如果 token 不是一个表达式的开头，则报错
             _ => Err(format!(
-                "Unexpected token {:?} on line {}: Expected an expression (integer, unary operator, or '(').",
-                next_token.token_type, next_token.line
+                "Unexpected token {:?}, expected a factor (integer, unary operator, or '(').",
+                next_token.token_type
             )),
         }
     }

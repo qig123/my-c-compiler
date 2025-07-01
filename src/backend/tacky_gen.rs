@@ -72,6 +72,9 @@ impl TackyGenerator {
                 // 5. 返回代表结果的临时变量
                 Ok(dst)
             }
+            _ => {
+                return Err(format!("unsupport type",));
+            }
         }
     }
 

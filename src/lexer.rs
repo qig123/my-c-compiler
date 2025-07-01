@@ -11,10 +11,10 @@ pub enum TokenType {
     Minus,      // -
     Tilde,      // ~
     Decrement,  // --
-    Add,        //+
-    Div,        // /
-    Mul,        //*
-    Remainder,  //
+    Plus,       // + (【修改】)
+    Asterisk,   // * (【修改】)
+    Slash,      // / (【修改】)
+    Percent,    // % (【修改】)
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
@@ -169,19 +169,19 @@ impl<'a> Lexer<'a> {
             }
             '+' => {
                 self.chars.next();
-                Ok(TokenType::Add)
+                Ok(TokenType::Plus)
             }
             '*' => {
                 self.chars.next();
-                Ok(TokenType::Mul)
+                Ok(TokenType::Asterisk)
             }
             '/' => {
                 self.chars.next();
-                Ok(TokenType::Div)
+                Ok(TokenType::Slash)
             }
             '%' => {
                 self.chars.next();
-                Ok(TokenType::Remainder)
+                Ok(TokenType::Percent)
             }
             '-' => {
                 // 1. 我们已经通过外层的 peek() 知道当前是 '-'
