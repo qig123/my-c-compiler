@@ -30,8 +30,8 @@ impl TackyGenerator {
 
     /// 【新增】生成一个唯一的标签名，例如 "_L0", "_L1"。
     /// 使用下划线和字母开头，确保是合法的汇编标签。
-    fn make_label(&mut self) -> String {
-        let label = format!("_L{}", self.label_counter);
+    fn make_label_with_prefix(&mut self, prefix: &str) -> String {
+        let label = format!("_{}_{}", prefix, self.label_counter);
         self.label_counter += 1;
         label
     }
@@ -109,8 +109,8 @@ impl TackyGenerator {
                         let result_var = tacky::Val::Var(result_var_name);
 
                         // 创建两个需要的标签
-                        let false_label = self.make_label();
-                        let end_label = self.make_label();
+                        let false_label = self.make_label_with_prefix("and_false");
+                        let end_label = self.make_label_with_prefix("and_end");
 
                         // 1. 计算左侧表达式 e1
                         let v1 = self.generate_tacky_for_expression(left, instructions)?;
@@ -155,8 +155,8 @@ impl TackyGenerator {
                         let result_var_name = self.make_temporary();
                         let result_var = tacky::Val::Var(result_var_name);
 
-                        let true_label = self.make_label();
-                        let end_label = self.make_label();
+                        let true_label = self.make_label_with_prefix("or_true");
+                        let end_label = self.make_label_with_prefix("or_end");
 
                         // 1. 计算 e1
                         let v1 = self.generate_tacky_for_expression(left, instructions)?;
