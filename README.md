@@ -8,3 +8,5 @@ cargo run -- --lex tests/input.c
  ../writing-a-c-compiler-tests/test_compiler ./target/debug/my_c_compiler --chapter 1 --stage lex
  
  ../writing-a-c-compiler-tests/test_compiler ./target/debug/my_c_compiler --chapter 1 --stage codegen
+ ../writing-a-c-compiler-tests/test_compiler ./target/debug/my_c_compiler --chapter 1 
+ ../writing-a-c-compiler-tests/test_compiler ./target/debug/my_c_compiler --chapter 2 --stage lex

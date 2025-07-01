@@ -8,6 +8,9 @@ pub enum TokenType {
     OpenBrace,  // {
     CloseBrace, // }
     Semicolon,  // ;
+    Minus,      // -
+    Tilde,      // ~
+    Decrement,  // --
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
@@ -156,7 +159,24 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(TokenType::Semicolon)
             }
-
+            '~' => {
+                self.chars.next();
+                Ok(TokenType::Tilde)
+            }
+            '-' => {
+                // 1. 我们已经通过外层的 peek() 知道当前是 '-'
+                self.chars.next(); // 消耗掉第一个 '-'
+                // 2. 再次使用 peek() 来“向前看”一个字符，这就是 peek_next 的效果
+                if self.chars.peek() == Some(&'-') {
+                    // 如果下一个字符也是 '-'
+                    self.chars.next(); // 消耗掉第二个 '-'
+                    Ok(TokenType::Decrement)
+                } else {
+                    // 如果下一个字符不是 '-' (或者是 None)
+                    // 那么它只是一个单独的减号
+                    Ok(TokenType::Minus)
+                }
+            }
             'a'..='z' | 'A'..='Z' | '_' => Ok(self.lex_identifier_or_keyword()),
 
             '0'..='9' => self.lex_integer_constant(),
