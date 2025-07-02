@@ -2,8 +2,10 @@
 
 use clap::Parser as ClapParser;
 use my_c_compiler::backend::{asm_gen::AsmGenerator, emitter, tacky_gen::TackyGenerator};
+use my_c_compiler::common::UniqueIdGenerator;
 use my_c_compiler::lexer::{self, Token};
 use my_c_compiler::parser as CParser;
+use my_c_compiler::semantics::validator::Validator;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,6 +22,8 @@ struct Cli {
     #[arg(long)]
     parse: bool,
 
+    #[arg(long)]
+    validate: bool,
     /// 【新增】Stop after TACKY IR generation and print TACKY
     #[arg(long)]
     tacky: bool,
@@ -44,6 +48,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let mut id_generator = UniqueIdGenerator::new();
+
     // --- STAGE 1 & 2: PREPROCESSING and LEXING (不变) ---
     println!("1. Preprocessing {}...", cli.input_file.display());
     // ... (preprocessing code is correct) ...
@@ -85,11 +91,25 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
-
-    // --- 【STAGE 4: TACKY IR GENERATION】 (C AST -> TACKY IR) ---
-    println!("\n4. Generating TACKY Intermediate Representation (IR)...");
-    let mut tacky_generator = TackyGenerator::new();
-    let tacky_ir = tacky_generator.generate_tacky(c_ast)?; // c_ast 被消耗
+    // --- 【新增】STAGE 4: SEMANTIC ANALYSIS (VALIDATION) ---
+    println!("\n4. Performing semantic analysis (validation)...");
+    let mut validator = Validator::new(&mut id_generator);
+    let validated_ast = validator.validate_program(c_ast)?; // c_ast is consumed
+    println!("   ✓ Semantic analysis successful.");
+    if cli.validate {
+        println!(
+            "--- Validated C AST ---\n{:#?}\n---------------------",
+            validated_ast
+        );
+        println!("\nHalting as requested by --validate.");
+        fs::remove_file(&preprocessed_path)?;
+        return Ok(());
+    }
+    // --- 【修改】STAGE 5: TACKY IR GENERATION ---
+    println!("\n5. Generating TACKY Intermediate Representation (IR)...");
+    let mut tacky_generator = TackyGenerator::new(&mut id_generator);
+    // 【修改】使用 validated_ast 而不是 c_ast
+    let tacky_ir = tacky_generator.generate_tacky(validated_ast)?; // validated_ast is consumed
     println!("   ✓ TACKY IR generation successful.");
     if cli.tacky {
         println!(
@@ -100,11 +120,10 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
-
-    // --- 【STAGE 5: ASSEMBLY GENERATION】 (TACKY IR -> Assembly AST) ---
-    println!("\n5. Generating Assembly AST from TACKY IR...");
+    // --- 【修改】STAGE 6: ASSEMBLY GENERATION ---
+    println!("\n6. Generating Assembly AST from TACKY IR...");
     let mut asm_generator = AsmGenerator::new();
-    let asm_ast = asm_generator.generate_assembly(tacky_ir)?; // tacky_ir 被消耗
+    let asm_ast = asm_generator.generate_assembly(tacky_ir)?; // tacky_ir is consumed
     println!("   ✓ Assembly AST generation successful.");
     if cli.codegen {
         println!(
@@ -115,10 +134,9 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
-
-    // --- 【STAGE 6: CODE EMISSION】 (Assembly AST -> Assembly Code String) ---
-    println!("\n6. Emitting assembly code from Assembly AST...");
-    let assembly_code = emitter::emit_assembly(asm_ast)?; // asm_ast 被消耗
+    // --- 【修改】STAGE 7: CODE EMISSION ---
+    println!("\n7. Emitting assembly code from Assembly AST...");
+    let assembly_code = emitter::emit_assembly(asm_ast)?; // asm_ast is consumed
     let assembly_path = parent_dir.join(file_stem).with_extension("s");
     fs::write(&assembly_path, &assembly_code)?;
     println!(
@@ -126,15 +144,14 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         assembly_path.display()
     );
 
-    // --- 【STAGE 7: ASSEMBLE & LINK】 ---
-    println!("\n7. Assembling and linking...");
+    // --- 【修改】STAGE 8: ASSEMBLE & LINK ---
+    println!("\n8. Assembling and linking...");
     let output_path = parent_dir.join(file_stem);
     assemble(&assembly_path, &output_path)?;
     println!(
         "   ✓ Assembling and linking complete: {}",
         output_path.display()
     );
-
     // --- Cleanup ---
     // 总是删除预处理文件
     fs::remove_file(&preprocessed_path)?;

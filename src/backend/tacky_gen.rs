@@ -1,30 +1,30 @@
 // src/backend/tacky_gen.rs
 
+use crate::common::UniqueIdGenerator;
 // 导入我们需要的数据结构
 use crate::ir::tacky;
-use crate::parser;
+use crate::parser::{self, BlockItem, Expression, Statement};
 
 /// 负责将 C AST 转换为 TACKY IR 的生成器。
-pub struct TackyGenerator {
-    /// 用于生成唯一临时变量名的计数器。
-    temp_counter: usize,
+pub struct TackyGenerator<'a> {
     /// 【新增】用于生成唯一标签名的计数器。
     label_counter: usize,
+    id_generator: &'a mut UniqueIdGenerator,
 }
 
-impl TackyGenerator {
+impl<'a> TackyGenerator<'a> {
     /// 创建一个新的 TackyGenerator 实例。
-    pub fn new() -> Self {
+    pub fn new(id_generator: &'a mut UniqueIdGenerator) -> Self {
         TackyGenerator {
-            temp_counter: 0,
+            id_generator,
             label_counter: 0, // 【新增】初始化标签计数器
         }
     }
 
     /// 生成一个唯一的临时变量名，例如 "tmp.0", "tmp.1"。
     fn make_temporary(&mut self) -> String {
-        let name = format!("tmp.{}", self.temp_counter);
-        self.temp_counter += 1;
+        let id = self.id_generator.next();
+        let name = format!("tmp.{}", id);
         name
     }
 
@@ -79,6 +79,29 @@ impl TackyGenerator {
         instructions: &mut Vec<tacky::Instruction>,
     ) -> Result<tacky::Val, String> {
         match exp {
+            // 经过语义分析后，变量名已经是唯一的了。
+            Expression::Var(name) => Ok(tacky::Val::Var(name.clone())),
+            Expression::Assign { left, right } => {
+                // 赋值表达式的结果是右侧的值
+                // 首先计算右侧表达式的值
+                let rhs_val = self.generate_tacky_for_expression(right, instructions)?;
+
+                // 左侧必须是变量（这在语义分析阶段已保证）
+                if let Expression::Var(var_name) = &**left {
+                    let dst_var = tacky::Val::Var(var_name.clone());
+                    // 生成 Copy 指令
+                    instructions.push(tacky::Instruction::Copy {
+                        src: rhs_val.clone(),
+                        dst: dst_var,
+                    });
+                    // 赋值表达式的值就是赋的值
+                    Ok(rhs_val)
+                } else {
+                    // 理论上语义分析已经阻止了这种情况
+                    Err("Invalid left-hand side in assignment.".to_string())
+                }
+            }
+
             parser::Expression::Constant(i) => Ok(tacky::Val::Constant(*i)),
             parser::Expression::Unary {
                 operator,
@@ -219,39 +242,81 @@ impl TackyGenerator {
                     }
                 }
             }
-            _ => {
-                panic!()
-            }
         }
     }
 
-    /// 将一个语句 AST 节点转换为 TACKY 指令。 (无需修改)
+    /// 【新增】为单个块项目生成 TACKY 指令
+    fn generate_tacky_for_block_item(
+        &mut self,
+        item: &BlockItem,
+        instructions: &mut Vec<tacky::Instruction>,
+    ) -> Result<(), String> {
+        match item {
+            // 如果是声明
+            BlockItem::D(declaration) => {
+                // 只处理有初始化器的声明
+                if let Some(init_expr) = &declaration.init {
+                    // 这等同于一个赋值语句: `var = init_expr`
+                    let rhs_val = self.generate_tacky_for_expression(init_expr, instructions)?;
+                    let dst_var = tacky::Val::Var(declaration.name.clone());
+                    instructions.push(tacky::Instruction::Copy {
+                        src: rhs_val,
+                        dst: dst_var,
+                    });
+                }
+                // 没有初始化器的声明 (e.g., "int a;") 在 TACKY 层面被忽略
+                Ok(())
+            }
+            // 如果是语句
+            BlockItem::S(statement) => self.generate_tacky_for_statement(statement, instructions),
+        }
+    }
+
+    /// 【修改】将一个语句 AST 节点转换为 TACKY 指令。
     fn generate_tacky_for_statement(
         &mut self,
         stmt: &parser::Statement,
         instructions: &mut Vec<tacky::Instruction>,
     ) -> Result<(), String> {
-        // ... (保持不变)
         match stmt {
-            parser::Statement::Return(exp) => {
+            Statement::Return(exp) => {
                 let return_val = self.generate_tacky_for_expression(exp, instructions)?;
                 instructions.push(tacky::Instruction::Return(return_val));
                 Ok(())
             }
-            _ => {
-                panic!()
+            // 【新增】处理表达式语句
+            Statement::Expression(exp) => {
+                // 我们需要为表达式生成指令，但可以忽略其结果。
+                // 例如，对于 "a * 2;"，我们仍然计算它，但结果不用于任何地方。
+                self.generate_tacky_for_expression(exp, instructions)?;
+                Ok(())
+            }
+            // 【新增】处理空语句
+            Statement::Empty => {
+                // 空语句不产生任何 TACKY 指令
+                Ok(())
             }
         }
     }
-
     /// 将一个函数 AST 节点转换为 TACKY 函数。 (无需修改)
     fn generate_tacky_for_function(
         &mut self,
         func: &parser::Function,
     ) -> Result<tacky::Function, String> {
-        // ... (保持不变)
         let mut instructions = Vec::new();
-        // self.generate_tacky_for_statement(&func.body, &mut instructions)?;
+
+        // 1. 遍历函数体中的所有块项目，并依次生成指令
+        for item in &func.body {
+            self.generate_tacky_for_block_item(item, &mut instructions)?;
+        }
+
+        // 2. 【关键】处理函数末尾没有 return 的情况
+        // 检查最后一条指令是否是 Return
+        if !matches!(instructions.last(), Some(tacky::Instruction::Return(_))) {
+            // 如果不是，或者函数体为空，则隐式添加 "return 0;"
+            instructions.push(tacky::Instruction::Return(tacky::Val::Constant(0)));
+        }
+
         Ok(tacky::Function {
             name: func.name.clone(),
             body: instructions,
@@ -260,7 +325,6 @@ impl TackyGenerator {
 
     /// 主入口：将整个 C 程序 AST 转换为 TACKY 程序。 (无需修改)
     pub fn generate_tacky(&mut self, c_ast: parser::Program) -> Result<tacky::Program, String> {
-        // ... (保持不变)
         let tacky_function = self.generate_tacky_for_function(&c_ast.function)?;
         Ok(tacky::Program {
             function: tacky_function,
