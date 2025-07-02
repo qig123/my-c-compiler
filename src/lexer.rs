@@ -3,18 +3,20 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenType {
     // ... 保持不变 ...
-    OpenParen,  // (
-    CloseParen, // )
-    OpenBrace,  // {
-    CloseBrace, // }
-    Semicolon,  // ;
-    Minus,      // -
-    Tilde,      // ~
-    Decrement,  // --
-    Plus,       // + (【修改】)
-    Asterisk,   // * (【修改】)
-    Slash,      // / (【修改】)
-    Percent,    // % (【修改】)
+    OpenParen,    // (
+    CloseParen,   // )
+    OpenBrace,    // {
+    CloseBrace,   // }
+    Semicolon,    // ;
+    Minus,        // -
+    Tilde,        // ~
+    Decrement,    // --
+    Plus,         // + (【修改】)
+    Asterisk,     // * (【修改】)
+    Slash,        // / (【修改】)
+    Percent,      // % (【修改】)
+    QuestionMark, // ?  <-- 新增
+    Colon,        // :  <-- 新增
     // --- 第 4 章新增/修改的 Token ---
     Not,          // ! (从 Bang 修改)
     And,          // &&
@@ -29,6 +31,8 @@ pub enum TokenType {
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
+    KeywordIf,
+    KeywordElse,
     Identifier(String),
     IntegerConstant(i32),
 }
@@ -194,7 +198,14 @@ impl<'a> Lexer<'a> {
                 self.chars.next();
                 Ok(TokenType::Percent)
             }
-
+            '?' => {
+                self.chars.next();
+                Ok(TokenType::QuestionMark)
+            }
+            ':' => {
+                self.chars.next();
+                Ok(TokenType::Colon)
+            }
             '-' => {
                 self.chars.next();
                 if self.chars.peek() == Some(&'-') {
