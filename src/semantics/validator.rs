@@ -3,7 +3,7 @@
 // 【修改】 在 use 语句中明确列出所有需要的类型，包括 Empty
 use crate::{
     common::UniqueIdGenerator,
-    parser::{BlockItem, Declaration, Expression, Function, Program, Statement},
+    parser::{Block, BlockItem, Declaration, Expression, Function, Program, Statement},
 };
 use std::collections::HashMap;
 
@@ -42,13 +42,15 @@ impl<'a> Validator<'a> {
 
     fn validate_function(&mut self, function: Function) -> Result<Function, String> {
         let mut validated_body = Vec::new();
-        for item in function.body {
+        for item in function.body.blocks {
             validated_body.push(self.validate_block_item(item)?);
         }
 
         Ok(Function {
             name: function.name,
-            body: validated_body,
+            body: Block {
+                blocks: validated_body,
+            },
         })
     }
 
@@ -136,6 +138,9 @@ impl<'a> Validator<'a> {
                     then_stat: Box::new(validated_then),
                     else_stat: validated_else,
                 })
+            }
+            _ => {
+                panic!()
             }
         }
     }

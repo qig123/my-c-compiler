@@ -13,7 +13,11 @@ pub struct Program {
 #[derive(Debug, PartialEq)]
 pub struct Function {
     pub name: String,
-    pub body: Vec<BlockItem>,
+    pub body: Block,
+}
+#[derive(Debug, PartialEq)]
+pub struct Block {
+    pub blocks: Vec<BlockItem>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -39,6 +43,7 @@ pub enum Statement {
         then_stat: Box<Statement>,
         else_stat: Option<Box<Statement>>,
     },
+    Compound(Block),
 }
 
 #[derive(Debug, PartialEq)]
@@ -188,20 +193,29 @@ impl<'a> Parser<'a> {
         self.expect_token(TokenType::OpenParen)?;
         self.expect_token(TokenType::KeywordVoid)?;
         self.expect_token(TokenType::CloseParen)?;
-        self.expect_token(TokenType::OpenBrace)?;
 
-        let mut body = Vec::new();
+        // 【修改】直接调用新的辅助函数
+        let body = self.parse_block()?;
+
+        Ok(Function { name, body })
+    }
+    /// 【新增】解析一个由花括号包裹的块。
+    /// <block> ::= "{" {<block-item>} "}"
+    fn parse_block(&mut self) -> Result<Block, String> {
+        self.expect_token(TokenType::OpenBrace)?; // 期望并消费 '{'
+
+        let mut items = Vec::new();
         // 循环解析 block-item，直到遇到 '}'
         while self
             .peek()
             .map_or(false, |t| t.token_type != TokenType::CloseBrace)
         {
-            body.push(self.parse_block_item()?);
+            items.push(self.parse_block_item()?);
         }
 
-        self.expect_token(TokenType::CloseBrace)?;
+        self.expect_token(TokenType::CloseBrace)?; // 期望并消费 '}'
 
-        Ok(Function { name, body })
+        Ok(Block { blocks: items })
     }
 
     /// 【新增】解析一个块项目。
@@ -246,7 +260,7 @@ impl<'a> Parser<'a> {
     }
 
     /// 【修改】解析一个语句。
-    /// <statement> ::= "return" <exp> ";" | [<exp>] ";" |"if" "(" <exp> ")" <statement> ["else" <statement>]
+    /// <statement> ::= "return" <exp> ";" | [<exp>] ";" |"if" "(" <exp> ")" <statement> ["else" <statement>] || <block>
     fn parse_statement(&mut self) -> Result<Statement, String> {
         if let Some(token) = self.peek() {
             match token.token_type {
@@ -283,6 +297,10 @@ impl<'a> Parser<'a> {
                         then_stat: Box::new(then_s),
                         else_stat: else_s,
                     });
+                }
+                TokenType::OpenBrace => {
+                    let block = self.parse_block()?;
+                    Ok(Statement::Compound(block))
                 }
                 _ => {
                     // 表达式语句：<exp> ;
@@ -481,5 +499,85 @@ mod tests {
                 panic!("\n--- PARSING FAILED! ---\nError: {}", e);
             }
         }
+    }
+
+    #[test]
+    fn test_compound_statement() {
+        // 一个包含复合语句的 C 代码
+        let source_code = r#"
+        int main(void) {
+            int a = 1;
+            {
+                int b = 2;
+                return b;
+            }
+            return a;
+        }
+    "#;
+
+        println!("--- Testing Compound Statement ---");
+        println!("Source:\n{}", source_code);
+
+        // 1. 词法分析
+        let lexer = Lexer::new(source_code);
+        let tokens: Vec<Token> = lexer.collect::<Result<_, _>>().expect("Lexing failed");
+
+        // 2. 语法分析
+        let mut parser = Parser::new(&tokens);
+        let program = parser.parse().expect("Parsing failed");
+
+        // 3. 断言 AST 结构
+        // 我们来验证解析出的 AST 是否符合我们的预期
+
+        // main 函数应该有 3 个块项目
+        assert_eq!(
+            program.function.body.blocks.len(),
+            3,
+            "Function body should have 3 block items"
+        );
+
+        // 第一个项目：int a = 1; (这是一个声明)
+        let first_item = &program.function.body.blocks[0];
+        assert!(
+            matches!(first_item, BlockItem::D(_)),
+            "First item should be a Declaration"
+        );
+
+        // 第二个项目：{...} (这是一个复合语句)
+        let second_item = &program.function.body.blocks[1];
+        if let BlockItem::S(Statement::Compound(inner_block)) = second_item {
+            // 复合语句内部应该有 2 个块项目
+            assert_eq!(
+                inner_block.blocks.len(),
+                2,
+                "Inner block should have 2 items"
+            );
+
+            // 复合语句的第一个项目：int b = 2;
+            assert!(
+                matches!(inner_block.blocks[0], BlockItem::D(_)),
+                "Inner block's first item should be a Declaration"
+            );
+
+            // 复合语句的第二个项目：return b;
+            assert!(
+                matches!(inner_block.blocks[1], BlockItem::S(Statement::Return(_))),
+                "Inner block's second item should be a Return statement"
+            );
+        } else {
+            panic!(
+                "Second item in function body should be a Compound statement. Got: {:?}",
+                second_item
+            );
+        }
+
+        // 第三个项目：return a; (这是一个返回语句)
+        let third_item = &program.function.body.blocks[2];
+        assert!(
+            matches!(third_item, BlockItem::S(Statement::Return(_))),
+            "Third item should be a Return statement"
+        );
+
+        println!("\n--- Compound Statement Test Passed! ---");
     }
 }

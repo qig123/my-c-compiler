@@ -396,6 +396,9 @@ impl<'a> TackyGenerator<'a> {
                 }
                 Ok(())
             }
+            _ => {
+                panic!()
+            }
         }
     }
     /// 将一个函数 AST 节点转换为 TACKY 函数。 (无需修改)
@@ -404,9 +407,8 @@ impl<'a> TackyGenerator<'a> {
         func: &parser::Function,
     ) -> Result<tacky::Function, String> {
         let mut instructions = Vec::new();
-
         // 1. 遍历函数体中的所有块项目，并依次生成指令
-        for item in &func.body {
+        for item in &func.body.blocks {
             self.generate_tacky_for_block_item(item, &mut instructions)?;
         }
 
