@@ -71,6 +71,16 @@ impl<'a> TackyGenerator<'a> {
             ),
         }
     }
+    fn generate_tacky_for_block(
+        &mut self,
+        block: &parser::Block,                      // 接收一个对 Block 的引用
+        instructions: &mut Vec<tacky::Instruction>, // 修改传入的主指令列表
+    ) -> Result<(), String> {
+        for item in &block.blocks {
+            self.generate_tacky_for_block_item(item, instructions)?;
+        }
+        Ok(())
+    }
 
     /// 【核心修改】将一个表达式 AST 节点转换为 TACKY 指令列表。
     fn generate_tacky_for_expression(
@@ -396,9 +406,7 @@ impl<'a> TackyGenerator<'a> {
                 }
                 Ok(())
             }
-            _ => {
-                panic!()
-            }
+            Statement::Compound(b) => self.generate_tacky_for_block(b, instructions),
         }
     }
     /// 将一个函数 AST 节点转换为 TACKY 函数。 (无需修改)
@@ -407,15 +415,11 @@ impl<'a> TackyGenerator<'a> {
         func: &parser::Function,
     ) -> Result<tacky::Function, String> {
         let mut instructions = Vec::new();
-        // 1. 遍历函数体中的所有块项目，并依次生成指令
-        for item in &func.body.blocks {
-            self.generate_tacky_for_block_item(item, &mut instructions)?;
-        }
+        // 1. 【优化】直接调用新的辅助函数来处理函数体
+        self.generate_tacky_for_block(&func.body, &mut instructions)?;
 
-        // 2. 【关键】处理函数末尾没有 return 的情况
-        // 检查最后一条指令是否是 Return
+        // 2. 检查并添加隐式 return 的逻辑保持不变，它只属于函数级别
         if !matches!(instructions.last(), Some(tacky::Instruction::Return(_))) {
-            // 如果不是，或者函数体为空，则隐式添加 "return 0;"
             instructions.push(tacky::Instruction::Return(tacky::Val::Constant(0)));
         }
 
