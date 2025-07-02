@@ -219,6 +219,9 @@ impl TackyGenerator {
                     }
                 }
             }
+            _ => {
+                panic!()
+            }
         }
     }
 
@@ -235,6 +238,9 @@ impl TackyGenerator {
                 instructions.push(tacky::Instruction::Return(return_val));
                 Ok(())
             }
+            _ => {
+                panic!()
+            }
         }
     }
 
@@ -245,7 +251,7 @@ impl TackyGenerator {
     ) -> Result<tacky::Function, String> {
         // ... (保持不变)
         let mut instructions = Vec::new();
-        self.generate_tacky_for_statement(&func.body, &mut instructions)?;
+        // self.generate_tacky_for_statement(&func.body, &mut instructions)?;
         Ok(tacky::Function {
             name: func.name.clone(),
             body: instructions,

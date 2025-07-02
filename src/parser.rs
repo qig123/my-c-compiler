@@ -4,59 +4,76 @@
 use crate::lexer::{Token, TokenType};
 
 // --- AST Node Definitions ---
-// 为了方便调试和查看，我们为所有 AST 节点派生 Debug trait。
-
-#[derive(Debug)]
+// 这些定义与你之前的版本一致，并且是正确的。
+#[derive(Debug, PartialEq)] // 派生 PartialEq 以便测试
 pub struct Program {
     pub function: Function,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Function {
     pub name: String,
-    pub body: Statement,
+    pub body: Vec<BlockItem>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
+pub enum BlockItem {
+    S(Statement),
+    D(Declaration),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Declaration {
+    // 【修改】字段设为 pub，以便在其他模块（如语义分析）中访问
+    pub name: String,
+    pub init: Option<Expression>,
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Statement {
     Return(Expression),
+    Expression(Expression),
+    Empty,
 }
 
-/// 代表一个一元运算符的类型
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum UnaryOperator {
-    Negate,     // - (从 Negation 修改)
-    Complement, // ~ (从 BitwiseComplement 修改)
-    Not,        // ! (从 Bang 修改)
+    Negate,
+    Complement,
+    Not,
 }
-#[derive(Debug)]
+
+#[derive(Debug, PartialEq)]
 pub enum BinaryOperator {
     Add,
-    Subtract, // 使用完整单词
-    Multiply, // 使用完整单词
-    Divide,   // 使用完整单词
+    Subtract,
+    Multiply,
+    Divide,
     Remainder,
-    And,            // &&
-    Or,             // ||
-    Equal,          // == (从 EqualEqual 修改)
-    NotEqual,       // != (从 BangEqual 修改)
-    LessThan,       // <  (从 Less 修改)
-    LessOrEqual,    // <=
-    GreaterThan,    // >  (从 Greater 修改)
-    GreaterOrEqual, // >=
+    And,
+    Or,
+    Equal,
+    NotEqual,
+    LessThan,
+    LessOrEqual,
+    GreaterThan,
+    GreaterOrEqual,
 }
 
-/// 代表一个表达式
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Expression {
     Constant(i32),
-    // 它包含一个运算符和一个指向内部表达式的智能指针
     Unary {
         operator: UnaryOperator,
-        expression: Box<Expression>, // 使用 Box 来处理递归定义
+        expression: Box<Expression>,
     },
     Binary {
         operator: BinaryOperator,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Var(String),
+    Assign {
         left: Box<Expression>,
         right: Box<Expression>,
     },
@@ -70,7 +87,6 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    /// 创建一个新的 Parser 实例。
     pub fn new(tokens: &'a [Token]) -> Self {
         Parser {
             tokens,
@@ -78,10 +94,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 解析整个程序，这是公共的入口点。
     pub fn parse(&mut self) -> Result<Program, String> {
         let function = self.parse_function()?;
-        // 可以在这里检查是否还有多余的 token，以确保整个输入都被解析了
         if self.position < self.tokens.len() {
             let token = &self.tokens[self.position];
             return Err(format!(
@@ -94,12 +108,10 @@ impl<'a> Parser<'a> {
 
     // --- Private Helper Methods ---
 
-    /// 查看当前位置的 token，但不消费它。
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.position)
     }
 
-    /// 消费当前 token 并前进到下一个。
     fn consume(&mut self) -> Option<&Token> {
         let token = self.tokens.get(self.position);
         if token.is_some() {
@@ -108,7 +120,6 @@ impl<'a> Parser<'a> {
         token
     }
 
-    /// 期望并消费一个特定类型的 token。如果当前 token 不是预期类型，则返回错误。
     fn expect_token(&mut self, expected_type: TokenType) -> Result<&Token, String> {
         match self.peek() {
             Some(token) if token.token_type == expected_type => Ok(self.consume().unwrap()),
@@ -123,72 +134,43 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 期望并消费一个标识符 token，返回其字符串值。
     fn expect_identifier(&mut self) -> Result<String, String> {
-        if let Some(TokenType::Identifier(name)) = self.peek().map(|t| &t.token_type) {
-            // 克隆 name
-            let name_clone = name.clone();
-            self.consume();
-            return Ok(name_clone);
+        match self.peek().map(|t| &t.token_type) {
+            Some(TokenType::Identifier(name)) => {
+                let name_clone = name.clone();
+                self.consume();
+                Ok(name_clone)
+            }
+            Some(other_token) => Err(format!(
+                "Expected an identifier, but found {:?}",
+                other_token
+            )),
+            None => Err("Expected an identifier, but found end of input.".to_string()),
         }
-
-        // 如果上面的 if 不匹配，说明 token 类型不对或没有 token
-        let found_token = self.peek();
-        Err(format!(
-            "Expected an identifier, but found {:?} on line {}",
-            found_token.map(|t| &t.token_type),
-            found_token.map_or(0, |t| t.line)
-        ))
     }
 
-    // A more concise version for expect_integer_constant
-    #[allow(dead_code)]
-    fn expect_integer_constant(&mut self) -> Result<i32, String> {
-        if let Some(TokenType::IntegerConstant(value)) = self.peek().map(|t| t.token_type.clone()) {
-            // `value` 是 i32，是 Copy 类型，所以这里是复制
-            self.consume();
-            return Ok(value);
-        }
-
-        // 如果上面的 if 不匹配
-        let found_token = self.peek();
-        Err(format!(
-            "Expected an integer constant, but found {:?} on line {}",
-            found_token.map(|t| &t.token_type),
-            found_token.map_or(0, |t| t.line)
-        ))
-    }
-    // 获取 Token 对应的二元运算符和优先级 ---
-    fn get_binary_operator_precedence(token_type: &TokenType) -> Option<(BinaryOperator, u8)> {
+    // --- 【新增】获取二元运算符的优先级 ---
+    // 我们将把这个逻辑移到 parse_expression 内部，但保留这个辅助函数以供参考
+    fn get_precedence(token_type: &TokenType) -> u8 {
         match token_type {
-            // 算术运算符
-            TokenType::Plus => Some((BinaryOperator::Add, 45)),
-            TokenType::Minus => Some((BinaryOperator::Subtract, 45)),
-            TokenType::Asterisk => Some((BinaryOperator::Multiply, 50)),
-            TokenType::Slash => Some((BinaryOperator::Divide, 50)),
-            TokenType::Percent => Some((BinaryOperator::Remainder, 50)),
-
-            // 关系运算符
-            TokenType::Less => Some((BinaryOperator::LessThan, 35)),
-            TokenType::LessEqual => Some((BinaryOperator::LessOrEqual, 35)),
-            TokenType::Greater => Some((BinaryOperator::GreaterThan, 35)),
-            TokenType::GreaterEqual => Some((BinaryOperator::GreaterOrEqual, 35)),
-
-            // 相等运算符
-            TokenType::Equal => Some((BinaryOperator::Equal, 30)),
-            TokenType::NotEqual => Some((BinaryOperator::NotEqual, 30)),
-
-            // 逻辑运算符
-            TokenType::And => Some((BinaryOperator::And, 10)), // 修正 Bug (之前是 Add)
-            TokenType::Or => Some((BinaryOperator::Or, 5)),    // 修正 Bug (之前是 Add)
-            _ => None,
+            TokenType::Assign => 1,
+            TokenType::Or => 5,
+            TokenType::And => 10,
+            TokenType::Equal | TokenType::NotEqual => 30,
+            TokenType::Less
+            | TokenType::LessEqual
+            | TokenType::Greater
+            | TokenType::GreaterEqual => 35,
+            TokenType::Plus | TokenType::Minus => 45,
+            TokenType::Asterisk | TokenType::Slash | TokenType::Percent => 50,
+            _ => 0, // 不是二元运算符
         }
     }
 
     // --- Recursive Descent Parsing Methods ---
 
-    /// 解析一个函数定义。
-    /// <function> ::= "int" <identifier> "(" "void" ")" "{" <statement> "}"
+    /// 【修改】解析一个函数定义。
+    /// <function> ::= "int" <identifier> "(" "void" ")" "{" {<block-item>} "}"
     fn parse_function(&mut self) -> Result<Function, String> {
         self.expect_token(TokenType::KeywordInt)?;
         let name = self.expect_identifier()?;
@@ -196,77 +178,166 @@ impl<'a> Parser<'a> {
         self.expect_token(TokenType::KeywordVoid)?;
         self.expect_token(TokenType::CloseParen)?;
         self.expect_token(TokenType::OpenBrace)?;
-        let body = self.parse_statement()?;
+
+        let mut body = Vec::new();
+        // 循环解析 block-item，直到遇到 '}'
+        while self
+            .peek()
+            .map_or(false, |t| t.token_type != TokenType::CloseBrace)
+        {
+            body.push(self.parse_block_item()?);
+        }
+
         self.expect_token(TokenType::CloseBrace)?;
 
         Ok(Function { name, body })
     }
 
-    /// 解析一个语句。
-    /// <statement> ::= "return" <exp> ";"
-    fn parse_statement(&mut self) -> Result<Statement, String> {
-        self.expect_token(TokenType::KeywordReturn)?;
-        let expression = self.parse_expression(0)?;
-        self.expect_token(TokenType::Semicolon)?;
-
-        Ok(Statement::Return(expression))
+    /// 【新增】解析一个块项目。
+    /// <block-item> ::= <statement> | <declaration>
+    fn parse_block_item(&mut self) -> Result<BlockItem, String> {
+        // 通过预读第一个 token 来判断是声明还是语句
+        if let Some(token) = self.peek() {
+            if token.token_type == TokenType::KeywordInt {
+                // 'int' 关键字开头，是声明
+                let declaration = self.parse_declaration()?;
+                Ok(BlockItem::D(declaration))
+            } else {
+                // 否则，是语句
+                let statement = self.parse_statement()?;
+                Ok(BlockItem::S(statement))
+            }
+        } else {
+            Err("Expected a statement or declaration, but found end of input.".to_string())
+        }
     }
 
-    /// 【核心】使用优先级爬升法解析表达式。
-    /// <exp> ::= <factor> { <binop> <exp> }
-    fn parse_expression(&mut self, min_precedence: u8) -> Result<Expression, String> {
-        // 表达式的左侧总是一个 factor
-        let mut left = self.parse_factor()?;
-        // 循环处理后续的 binop + exp
-        while let Some(next_token) = self.peek() {
-            // 检查下一个 token 是否是优先级足够的二元运算符
-            if let Some((op, precedence)) =
-                Self::get_binary_operator_precedence(&next_token.token_type)
-            {
-                if precedence >= min_precedence {
-                    // 消费掉这个运算符
-                    self.consume();
+    /// 【新增】解析一个声明。
+    /// <declaration> ::= "int" <identifier> ["=" <exp>] ";"
+    fn parse_declaration(&mut self) -> Result<Declaration, String> {
+        self.expect_token(TokenType::KeywordInt)?;
+        let name = self.expect_identifier()?;
 
-                    // 递归调用 parse_expression 来解析右侧
-                    // 注意：右侧的最低优先级要比当前运算符高 1 (或更高，取决于结合性)
-                    // 对于左结合，precedence + 1 是正确的
-                    let right = self.parse_expression(precedence + 1)?;
+        let init;
+        // 检查可选的初始化器
+        if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::Assign)
+        {
+            self.consume(); // 消费 '='
+            init = Some(self.parse_expression(0)?);
+        } else {
+            init = None;
+        }
 
-                    // 将左右两边组合成一个新的 left
-                    left = Expression::Binary {
-                        operator: op,
-                        left: Box::new(left),
-                        right: Box::new(right),
-                    };
-                } else {
-                    // 优先级不够，跳出循环
-                    break;
+        self.expect_token(TokenType::Semicolon)?;
+        Ok(Declaration { name, init })
+    }
+
+    /// 【修改】解析一个语句。
+    /// <statement> ::= "return" <exp> ";" | [<exp>] ";"
+    fn parse_statement(&mut self) -> Result<Statement, String> {
+        if let Some(token) = self.peek() {
+            match token.token_type {
+                TokenType::KeywordReturn => {
+                    self.consume(); // 消费 "return"
+                    let exp = self.parse_expression(0)?;
+                    self.expect_token(TokenType::Semicolon)?;
+                    Ok(Statement::Return(exp))
                 }
+                // 【修改】明确处理空语句的情况
+                TokenType::Semicolon => {
+                    self.consume(); // 消费 ";"
+                    Ok(Statement::Empty) // 返回 Empty 变体
+                }
+                _ => {
+                    // 表达式语句：<exp> ;
+                    let exp = self.parse_expression(0)?;
+                    self.expect_token(TokenType::Semicolon)?;
+                    Ok(Statement::Expression(exp)) // 返回 Expression 变体
+                }
+            }
+        } else {
+            Err("Expected a statement, but found end of input.".to_string())
+        }
+    }
+
+    /// 【核心修改】使用优先级爬升法解析表达式，支持右结合赋值。
+    fn parse_expression(&mut self, min_precedence: u8) -> Result<Expression, String> {
+        let mut left = self.parse_factor()?;
+
+        while let Some(next_token) = self.peek().cloned() {
+            let precedence = Self::get_precedence(&next_token.token_type);
+            if precedence == 0 || precedence < min_precedence {
+                break; // 不是二元运算符或优先级不够
+            }
+
+            // 消费掉这个运算符
+            self.consume();
+
+            // 检查结合性
+            if next_token.token_type == TokenType::Assign {
+                // 右结合
+                // 对于右结合运算符，递归调用的 min_precedence 与当前运算符的 precedence 相同
+                let right = self.parse_expression(precedence)?;
+                left = Expression::Assign {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                };
             } else {
-                // 不是二元运算符，跳出循环
-                break;
+                // 左结合
+                // 对于左结合运算符，递归调用的 min_precedence 是当前 precedence + 1
+                let op = self.token_to_binary_operator(&next_token.token_type)?;
+                let right = self.parse_expression(precedence + 1)?;
+                left = Expression::Binary {
+                    operator: op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                };
             }
         }
 
         Ok(left)
     }
-    /// <factor> ::= <int> | <unop> <factor> | "(" <exp> ")"
+
+    /// 【新增】辅助函数，将 TokenType 转换为 BinaryOperator
+    fn token_to_binary_operator(&self, token_type: &TokenType) -> Result<BinaryOperator, String> {
+        match token_type {
+            TokenType::Plus => Ok(BinaryOperator::Add),
+            TokenType::Minus => Ok(BinaryOperator::Subtract),
+            TokenType::Asterisk => Ok(BinaryOperator::Multiply),
+            TokenType::Slash => Ok(BinaryOperator::Divide),
+            TokenType::Percent => Ok(BinaryOperator::Remainder),
+            TokenType::And => Ok(BinaryOperator::And),
+            TokenType::Or => Ok(BinaryOperator::Or),
+            TokenType::Equal => Ok(BinaryOperator::Equal),
+            TokenType::NotEqual => Ok(BinaryOperator::NotEqual),
+            TokenType::Less => Ok(BinaryOperator::LessThan),
+            TokenType::LessEqual => Ok(BinaryOperator::LessOrEqual),
+            TokenType::Greater => Ok(BinaryOperator::GreaterThan),
+            TokenType::GreaterEqual => Ok(BinaryOperator::GreaterOrEqual),
+            _ => Err(format!("Not a binary operator token: {:?}", token_type)),
+        }
+    }
+
+    /// 【修改】解析一个因子。
+    /// <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
     fn parse_factor(&mut self) -> Result<Expression, String> {
         let next_token = self
-            .peek()
+            .consume()
             .cloned()
             .ok_or_else(|| "Unexpected end of input, expected a factor.".to_string())?;
 
         match &next_token.token_type {
             // <factor> ::= <int>
-            TokenType::IntegerConstant(val) => {
-                self.consume();
-                Ok(Expression::Constant(*val))
-            }
+            TokenType::IntegerConstant(val) => Ok(Expression::Constant(*val)),
+
+            // <factor> ::= <identifier>
+            TokenType::Identifier(name) => Ok(Expression::Var(name.clone())),
+
             // <factor> ::= <unop> <factor>
             TokenType::Minus | TokenType::Tilde | TokenType::Not => {
-                let operator = self.parse_unary_operator()?;
-                // 递归调用 parse_factor，而不是 parse_expression
+                let operator = self.token_to_unary_operator(&next_token.token_type)?;
                 let expression = self.parse_factor()?;
                 Ok(Expression::Unary {
                     operator,
@@ -275,32 +346,29 @@ impl<'a> Parser<'a> {
             }
             // <factor> ::= "(" <exp> ")"
             TokenType::OpenParen => {
-                self.consume();
-                // 括号内部是一个完整的表达式，所以调用 parse_expression
                 let inner_expression = self.parse_expression(0)?;
                 self.expect_token(TokenType::CloseParen)?;
                 Ok(inner_expression)
             }
             _ => Err(format!(
-                "Unexpected token {:?}, expected a factor (integer, unary operator, or '(').",
+                "Unexpected token {:?}, expected a factor (integer, identifier, unary operator, or '(').",
                 next_token.token_type
             )),
         }
     }
-    /// <unop> ::= "-" | "~" | "!"
-    fn parse_unary_operator(&mut self) -> Result<UnaryOperator, String> {
-        if let Some(token) = self.consume() {
-            match token.token_type {
-                TokenType::Minus => Ok(UnaryOperator::Negate), // 修改
-                TokenType::Tilde => Ok(UnaryOperator::Complement), // 修改
-                TokenType::Not => Ok(UnaryOperator::Not),      // 修改
-                _ => Err(format!(
-                    "Expected unary operator, but found {:?} on line {}",
-                    token.token_type, token.line
-                )),
-            }
-        } else {
-            Err("Expected unary operator, but found end of input.".to_string())
+
+    /// 【修改】解析一元运算符，现在从 token 类型直接转换
+    fn token_to_unary_operator(&self, token_type: &TokenType) -> Result<UnaryOperator, String> {
+        match token_type {
+            TokenType::Minus => Ok(UnaryOperator::Negate),
+            TokenType::Tilde => Ok(UnaryOperator::Complement),
+            TokenType::Not => Ok(UnaryOperator::Not),
+            _ => Err(format!(
+                "Expected unary operator, but found {:?}",
+                token_type
+            )),
         }
     }
+
+    // 原始的 parse_unary_operator 不再需要，因为逻辑已合并到 parse_factor 中
 }
