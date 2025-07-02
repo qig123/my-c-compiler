@@ -76,6 +76,8 @@ impl<'a> Lexer<'a> {
             "int" => TokenType::KeywordInt,
             "void" => TokenType::KeywordVoid,
             "return" => TokenType::KeywordReturn,
+            "if" => TokenType::KeywordIf,
+            "else" => TokenType::KeywordElse,
             _ => TokenType::Identifier(identifier),
         }
     }

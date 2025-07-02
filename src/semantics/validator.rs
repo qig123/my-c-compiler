@@ -108,6 +108,9 @@ impl<'a> Validator<'a> {
                 // There is no expression to validate, so we just return it as is.
                 Ok(Statement::Empty)
             }
+            _ => {
+                panic!()
+            }
         }
     }
 
@@ -160,6 +163,9 @@ impl<'a> Validator<'a> {
                     left: Box::new(validated_left),
                     right: Box::new(validated_right),
                 })
+            }
+            _ => {
+                panic!()
             }
         }
     }

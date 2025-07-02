@@ -34,6 +34,11 @@ pub enum Statement {
     Return(Expression),
     Expression(Expression),
     Empty,
+    If {
+        condition: Expression,
+        then_stat: Box<Statement>,
+        else_stat: Option<Box<Statement>>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -74,6 +79,11 @@ pub enum Expression {
     },
     Var(String),
     Assign {
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Conditional {
+        condtion: Box<Expression>,
         left: Box<Expression>,
         right: Box<Expression>,
     },
@@ -154,6 +164,7 @@ impl<'a> Parser<'a> {
     fn get_precedence(token_type: &TokenType) -> u8 {
         match token_type {
             TokenType::Assign => 1,
+            TokenType::QuestionMark => 3,
             TokenType::Or => 5,
             TokenType::And => 10,
             TokenType::Equal | TokenType::NotEqual => 30,
@@ -235,7 +246,7 @@ impl<'a> Parser<'a> {
     }
 
     /// 【修改】解析一个语句。
-    /// <statement> ::= "return" <exp> ";" | [<exp>] ";"
+    /// <statement> ::= "return" <exp> ";" | [<exp>] ";" |"if" "(" <exp> ")" <statement> ["else" <statement>]
     fn parse_statement(&mut self) -> Result<Statement, String> {
         if let Some(token) = self.peek() {
             match token.token_type {
@@ -249,6 +260,29 @@ impl<'a> Parser<'a> {
                 TokenType::Semicolon => {
                     self.consume(); // 消费 ";"
                     Ok(Statement::Empty) // 返回 Empty 变体
+                }
+                TokenType::KeywordIf => {
+                    self.consume(); //消费if
+                    self.expect_token(TokenType::OpenParen)?;
+                    let c = self.parse_expression(0)?;
+                    self.expect_token(TokenType::CloseParen)?;
+                    let then_s = self.parse_statement()?;
+                    let else_s;
+                    if let Some(token) = self.peek() {
+                        if token.token_type == TokenType::KeywordElse {
+                            self.consume();
+                            else_s = Some(Box::new(self.parse_statement()?));
+                        } else {
+                            else_s = None;
+                        }
+                    } else {
+                        else_s = None;
+                    }
+                    return Ok(Statement::If {
+                        condition: c,
+                        then_stat: Box::new(then_s),
+                        else_stat: else_s,
+                    });
                 }
                 _ => {
                     // 表达式语句：<exp> ;
@@ -283,6 +317,24 @@ impl<'a> Parser<'a> {
                 left = Expression::Assign {
                     left: Box::new(left),
                     right: Box::new(right),
+                };
+            } else if next_token.token_type == TokenType::QuestionMark {
+                //右结合
+                // `left` 已经是我们的 condition 部分
+                // `?` 已经被消费了
+                // 解析 "then" 分支
+                let then_branch = self.parse_expression(0)?;
+                // 期望一个冒号
+                self.expect_token(TokenType::Colon)?;
+
+                // 解析 "else" 分支，使用 '?' 的优先级进行右结合处理
+                let else_branch = self.parse_expression(precedence)?;
+
+                // 组装成 Conditional 节点
+                left = Expression::Conditional {
+                    condtion: Box::new(left),
+                    left: Box::new(then_branch),
+                    right: Box::new(else_branch),
                 };
             } else {
                 // 左结合
@@ -322,34 +374,48 @@ impl<'a> Parser<'a> {
 
     /// 【修改】解析一个因子。
     /// <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
+    /// 【修改】解析一个因子。 (更健壮的版本)
+    /// <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
     fn parse_factor(&mut self) -> Result<Expression, String> {
+        // 先 peek() 查看下一个 token 是什么
         let next_token = self
-            .consume()
+            .peek()
             .cloned()
             .ok_or_else(|| "Unexpected end of input, expected a factor.".to_string())?;
 
         match &next_token.token_type {
             // <factor> ::= <int>
-            TokenType::IntegerConstant(val) => Ok(Expression::Constant(*val)),
+            TokenType::IntegerConstant(val) => {
+                self.consume(); // 匹配成功，现在消费它
+                Ok(Expression::Constant(*val))
+            }
 
             // <factor> ::= <identifier>
-            TokenType::Identifier(name) => Ok(Expression::Var(name.clone())),
+            TokenType::Identifier(name) => {
+                self.consume(); // 匹配成功，现在消费它
+                Ok(Expression::Var(name.clone()))
+            }
 
             // <factor> ::= <unop> <factor>
             TokenType::Minus | TokenType::Tilde | TokenType::Not => {
+                self.consume(); // 消费一元运算符
                 let operator = self.token_to_unary_operator(&next_token.token_type)?;
+                // 递归调用 parse_factor 来解析后面的因子
                 let expression = self.parse_factor()?;
                 Ok(Expression::Unary {
                     operator,
                     expression: Box::new(expression),
                 })
             }
+
             // <factor> ::= "(" <exp> ")"
             TokenType::OpenParen => {
+                self.consume(); // 消费 '('
                 let inner_expression = self.parse_expression(0)?;
-                self.expect_token(TokenType::CloseParen)?;
+                self.expect_token(TokenType::CloseParen)?; // 消费 ')'
                 Ok(inner_expression)
             }
+
             _ => Err(format!(
                 "Unexpected token {:?}, expected a factor (integer, identifier, unary operator, or '(').",
                 next_token.token_type
@@ -371,4 +437,49 @@ impl<'a> Parser<'a> {
     }
 
     // 原始的 parse_unary_operator 不再需要，因为逻辑已合并到 parse_factor 中
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*; // 导入父模块（也就是你的 parser）的所有内容
+    use crate::lexer::Lexer; // 导入 Lexer
+
+    // 在这里写我们的调试测试
+    #[test]
+    fn debug_parsing_of_parenthesized_expression_statement() {
+        // 1. 定义一个最小化的、能复现问题的 C 代码字符串
+        // 这个例子 "(a);" 是一个合法的表达式语句，它会暴露你 parse_factor 中的 bug。
+        let source_code = "int main(void) {
+    if (1)
+        return c;
+    int c = 0;
+}";
+
+        // 2. 像你的 main.rs 一样，先进行词法分析
+        println!("--- Lexing source code ---");
+        let lexer = Lexer::new(source_code);
+        let tokens: Vec<Token> = lexer.collect::<Result<_, _>>().unwrap();
+        println!("{:#?}", tokens); // 打印出 tokens 方便查看
+
+        // 3. 创建 Parser 并调用 parse 方法
+        println!("\n--- Parsing tokens ---");
+        let mut parser = Parser::new(&tokens);
+        let result = parser.parse();
+
+        // 4. 断言结果并打印
+        // 我们期望它能成功解析。如果失败，测试会 panic 并打印出详细的错误信息。
+        // 这就是我们想要的调试入口！
+        match result {
+            Ok(ast) => {
+                println!("\n--- Successfully Parsed AST ---");
+                println!("{:#?}", ast);
+                // 如果成功了，我们可以断言它成功了
+                assert!(true);
+            }
+            Err(e) => {
+                // 如果失败了，为了调试，我们故意让测试失败并打印错误
+                panic!("\n--- PARSING FAILED! ---\nError: {}", e);
+            }
+        }
+    }
 }

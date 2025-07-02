@@ -242,6 +242,9 @@ impl<'a> TackyGenerator<'a> {
                     }
                 }
             }
+            _ => {
+                panic!()
+            }
         }
     }
 
@@ -295,6 +298,9 @@ impl<'a> TackyGenerator<'a> {
             Statement::Empty => {
                 // 空语句不产生任何 TACKY 指令
                 Ok(())
+            }
+            _ => {
+                panic!()
             }
         }
     }
