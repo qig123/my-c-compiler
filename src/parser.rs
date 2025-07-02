@@ -83,7 +83,7 @@ pub enum Expression {
         right: Box<Expression>,
     },
     Conditional {
-        condtion: Box<Expression>,
+        condition: Box<Expression>,
         left: Box<Expression>,
         right: Box<Expression>,
     },
@@ -332,7 +332,7 @@ impl<'a> Parser<'a> {
 
                 // 组装成 Conditional 节点
                 left = Expression::Conditional {
-                    condtion: Box::new(left),
+                    condition: Box::new(left),
                     left: Box::new(then_branch),
                     right: Box::new(else_branch),
                 };

@@ -108,8 +108,34 @@ impl<'a> Validator<'a> {
                 // There is no expression to validate, so we just return it as is.
                 Ok(Statement::Empty)
             }
-            _ => {
-                panic!()
+            Statement::If {
+                condition,
+                then_stat,
+                else_stat,
+            } => {
+                // 1. 验证条件表达式
+                let validated_condition = self.validate_expression(condition)?;
+
+                // 2. 验证 then 分支的语句
+                // 注意：这里是递归调用 validate_statement
+                let validated_then = self.validate_statement(*then_stat)?;
+
+                // 3. 验证可选的 else 分支
+                let validated_else = match else_stat {
+                    Some(else_s) => {
+                        // 如果存在 else 分支，同样递归验证它
+                        let validated = self.validate_statement(*else_s)?;
+                        Some(Box::new(validated))
+                    }
+                    None => None, // 如果不存在，就是 None
+                };
+
+                // 4. 用验证过的新部分重新组装成一个 If 语句
+                Ok(Statement::If {
+                    condition: validated_condition,
+                    then_stat: Box::new(validated_then),
+                    else_stat: validated_else,
+                })
             }
         }
     }
@@ -164,8 +190,19 @@ impl<'a> Validator<'a> {
                     right: Box::new(validated_right),
                 })
             }
-            _ => {
-                panic!()
+            Expression::Conditional {
+                condition,
+                left,
+                right,
+            } => {
+                let validated_cond = self.validate_expression(*condition)?;
+                let validated_then = self.validate_expression(*left)?;
+                let validated_else = self.validate_expression(*right)?;
+                Ok(Expression::Conditional {
+                    condition: Box::new(validated_cond),
+                    left: Box::new(validated_then),
+                    right: Box::new(validated_else),
+                })
             }
         }
     }
