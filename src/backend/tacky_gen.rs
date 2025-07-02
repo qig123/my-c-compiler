@@ -242,8 +242,50 @@ impl<'a> TackyGenerator<'a> {
                     }
                 }
             }
-            _ => {
-                panic!()
+            Expression::Conditional {
+                condition,
+                left,
+                right,
+            } => {
+                // 为最终结果创建一个临时变量
+                let result_var = tacky::Val::Var(self.make_temporary());
+
+                // 创建两个标签：一个用于 else 分支，一个用于结束
+                let else_label = self.make_label_with_prefix("cond_else");
+                let end_label = self.make_label_with_prefix("cond_end");
+
+                // 1. 计算条件表达式
+                let cond_val = self.generate_tacky_for_expression(condition, instructions)?;
+
+                // 2. 如果条件为 0，跳转到 else 分支
+                instructions.push(tacky::Instruction::JumpIfZero {
+                    condition: cond_val,
+                    target: else_label.clone(),
+                });
+
+                // 3. (Then 分支) 计算 then 表达式，并将结果存入 result_var
+                let then_val = self.generate_tacky_for_expression(left, instructions)?;
+                instructions.push(tacky::Instruction::Copy {
+                    src: then_val,
+                    dst: result_var.clone(),
+                });
+                // 4. 无条件跳转到末尾，跳过 else 分支
+                instructions.push(tacky::Instruction::Jump(end_label.clone()));
+
+                // 5. (Else 分支) 放置 else 标签
+                instructions.push(tacky::Instruction::Label(else_label));
+                // 6. 计算 else 表达式，并将结果存入 result_var
+                let else_val = self.generate_tacky_for_expression(right, instructions)?;
+                instructions.push(tacky::Instruction::Copy {
+                    src: else_val,
+                    dst: result_var.clone(),
+                });
+
+                // 7. 放置结束标签
+                instructions.push(tacky::Instruction::Label(end_label));
+
+                // 整个条件表达式的值就是 result_var
+                Ok(result_var)
             }
         }
     }
@@ -299,8 +341,60 @@ impl<'a> TackyGenerator<'a> {
                 // 空语句不产生任何 TACKY 指令
                 Ok(())
             }
-            _ => {
-                panic!()
+            Statement::If {
+                condition,
+                then_stat,
+                else_stat,
+            } => {
+                // 根据是否存在 else 分支来决定逻辑
+                match else_stat {
+                    // Case 1: if-else 语句
+                    Some(else_s) => {
+                        let else_label = self.make_label_with_prefix("else");
+                        let end_label = self.make_label_with_prefix("if_end");
+
+                        // 1. 计算条件
+                        let cond_val =
+                            self.generate_tacky_for_expression(condition, instructions)?;
+                        // 2. 如果为 0，跳转到 else_label
+                        instructions.push(tacky::Instruction::JumpIfZero {
+                            condition: cond_val,
+                            target: else_label.clone(),
+                        });
+
+                        // 3. (Then 分支) 生成 then 语句的指令
+                        self.generate_tacky_for_statement(then_stat, instructions)?;
+                        // 4. 执行完 then 后，无条件跳转到末尾
+                        instructions.push(tacky::Instruction::Jump(end_label.clone()));
+
+                        // 5. (Else 分支) 放置 else 标签
+                        instructions.push(tacky::Instruction::Label(else_label));
+                        self.generate_tacky_for_statement(else_s, instructions)?;
+
+                        // 6. 放置结束标签
+                        instructions.push(tacky::Instruction::Label(end_label));
+                    }
+                    // Case 2: 只有 if，没有 else
+                    None => {
+                        let end_label = self.make_label_with_prefix("if_end");
+
+                        // 1. 计算条件
+                        let cond_val =
+                            self.generate_tacky_for_expression(condition, instructions)?;
+                        // 2. 如果为 0，直接跳过 then 分支，跳转到末尾
+                        instructions.push(tacky::Instruction::JumpIfZero {
+                            condition: cond_val,
+                            target: end_label.clone(),
+                        });
+
+                        // 3. (Then 分支) 生成 then 语句的指令
+                        self.generate_tacky_for_statement(then_stat, instructions)?;
+
+                        // 4. 放置结束标签
+                        instructions.push(tacky::Instruction::Label(end_label));
+                    }
+                }
+                Ok(())
             }
         }
     }
