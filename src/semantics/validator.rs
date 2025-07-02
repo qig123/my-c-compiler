@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// duplicate declarations, and transforms the AST to use unique variable names.
 pub struct Validator<'a> {
     /// Maps user-defined variable names in the current scope to unique names.
-    scope: Vec<HashMap<String, String>>,
+    scopes: Vec<HashMap<String, String>>,
     id_generator: &'a mut UniqueIdGenerator,
 }
 
@@ -20,7 +20,7 @@ impl<'a> Validator<'a> {
     /// Creates a new Validator.
     pub fn new(id_generator: &'a mut UniqueIdGenerator) -> Self {
         Validator {
-            scope: Vec::new(),
+            scopes: Vec::new(),
             id_generator,
         }
     }
@@ -41,17 +41,31 @@ impl<'a> Validator<'a> {
     }
 
     fn validate_function(&mut self, function: Function) -> Result<Function, String> {
-        self.push_scope(HashMap::new());
-        let mut validated_body = Vec::new();
-        for item in function.body.blocks {
-            validated_body.push(self.validate_block_item(item)?);
-        }
-        self.exit_scope();
+        // 注意：函数本身也构成一个作用域块
+        let validated_body = self.validate_block(function.body)?;
+
         Ok(Function {
             name: function.name,
-            body: Block {
-                blocks: validated_body,
-            },
+            body: validated_body,
+        })
+    }
+    /// 验证一个块，处理作用域的进入和退出，并验证其所有子项。
+    fn validate_block(&mut self, block: Block) -> Result<Block, String> {
+        // 1. 进入新作用域
+        self.enter_scope();
+
+        // 2. 遍历并验证块内的所有项目
+        let mut validated_items = Vec::new();
+        for item in block.blocks {
+            validated_items.push(self.validate_block_item(item)?);
+        }
+
+        // 3. 退出作用域
+        self.exit_scope();
+
+        // 4. 返回包含已验证项目的新的 Block
+        Ok(Block {
+            blocks: validated_items,
         })
     }
 
@@ -73,7 +87,7 @@ impl<'a> Validator<'a> {
         let unique_name = self.generate_unique_name(&decl.name);
 
         // 2. 现在，再开始对 scope 进行可变借用。
-        let m = self.scope.last_mut().unwrap();
+        let m = self.scopes.last_mut().unwrap();
 
         // 3. 检查和插入。
         if m.contains_key(&decl.name) {
@@ -143,15 +157,8 @@ impl<'a> Validator<'a> {
                 })
             }
             Statement::Compound(b) => {
-                self.push_scope(HashMap::new());
-                let mut validated_body = Vec::new();
-                for item in b.blocks {
-                    validated_body.push(self.validate_block_item(item)?);
-                }
-                self.exit_scope();
-                Ok(Statement::Compound(Block {
-                    blocks: validated_body,
-                }))
+                let validated_block = self.validate_block(b)?;
+                Ok(Statement::Compound(validated_block))
             }
         }
     }
@@ -161,7 +168,7 @@ impl<'a> Validator<'a> {
             Expression::Constant(c) => Ok(Expression::Constant(c)),
 
             Expression::Var(name) => {
-                if let Some(unique_name) = self.find_variable(&self.scope, &name.clone()) {
+                if let Some(unique_name) = self.find_variable(&self.scopes, &name.clone()) {
                     Ok(Expression::Var(unique_name))
                 } else {
                     Err(format!("Use of undeclared variable '{}'", name))
@@ -223,11 +230,12 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn push_scope(&mut self, m: HashMap<String, String>) {
-        self.scope.push(m);
+    fn enter_scope(&mut self) {
+        self.scopes.push(HashMap::new());
     }
+
     fn exit_scope(&mut self) {
-        self.scope.pop();
+        self.scopes.pop();
     }
     fn find_variable(&self, variable_vec: &[HashMap<String, String>], key: &str) -> Option<String> {
         variable_vec
