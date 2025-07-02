@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// duplicate declarations, and transforms the AST to use unique variable names.
 pub struct Validator<'a> {
     /// Maps user-defined variable names in the current scope to unique names.
-    variable_map: HashMap<String, String>,
+    scope: Vec<HashMap<String, String>>,
     id_generator: &'a mut UniqueIdGenerator,
 }
 
@@ -20,7 +20,7 @@ impl<'a> Validator<'a> {
     /// Creates a new Validator.
     pub fn new(id_generator: &'a mut UniqueIdGenerator) -> Self {
         Validator {
-            variable_map: HashMap::new(),
+            scope: Vec::new(),
             id_generator,
         }
     }
@@ -41,11 +41,12 @@ impl<'a> Validator<'a> {
     }
 
     fn validate_function(&mut self, function: Function) -> Result<Function, String> {
+        self.push_scope(HashMap::new());
         let mut validated_body = Vec::new();
         for item in function.body.blocks {
             validated_body.push(self.validate_block_item(item)?);
         }
-
+        self.exit_scope();
         Ok(Function {
             name: function.name,
             body: Block {
@@ -68,20 +69,22 @@ impl<'a> Validator<'a> {
     }
 
     fn validate_declaration(&mut self, decl: Declaration) -> Result<Declaration, String> {
-        // Rule: A variable cannot be declared more than once in the same scope.
-        if self.variable_map.contains_key(&decl.name) {
+        // 1. 先生成唯一的名称。这是一个可变借用，但它在这里就结束了。
+        let unique_name = self.generate_unique_name(&decl.name);
+
+        // 2. 现在，再开始对 scope 进行可变借用。
+        let m = self.scope.last_mut().unwrap();
+
+        // 3. 检查和插入。
+        if m.contains_key(&decl.name) {
             return Err(format!(
                 "Duplicate variable declaration for '{}'",
                 decl.name
             ));
         }
+        m.insert(decl.name.clone(), unique_name.clone());
 
-        let unique_name = self.generate_unique_name(&decl.name);
-        // We need to clone decl.name because it's moved into insert, but we might need it for the unique name.
-        self.variable_map
-            .insert(decl.name.clone(), unique_name.clone());
-
-        // Validate the initializer expression, if it exists.
+        // 4. 处理初始化器（这是一个新的可变借用，但之前的已经结束了）
         let validated_init = match decl.init {
             Some(expr) => Some(self.validate_expression(expr)?),
             None => None,
@@ -139,8 +142,16 @@ impl<'a> Validator<'a> {
                     else_stat: validated_else,
                 })
             }
-            _ => {
-                panic!()
+            Statement::Compound(b) => {
+                self.push_scope(HashMap::new());
+                let mut validated_body = Vec::new();
+                for item in b.blocks {
+                    validated_body.push(self.validate_block_item(item)?);
+                }
+                self.exit_scope();
+                Ok(Statement::Compound(Block {
+                    blocks: validated_body,
+                }))
             }
         }
     }
@@ -150,8 +161,8 @@ impl<'a> Validator<'a> {
             Expression::Constant(c) => Ok(Expression::Constant(c)),
 
             Expression::Var(name) => {
-                if let Some(unique_name) = self.variable_map.get(&name) {
-                    Ok(Expression::Var(unique_name.clone()))
+                if let Some(unique_name) = self.find_variable(&self.scope, &name.clone()) {
+                    Ok(Expression::Var(unique_name))
                 } else {
                     Err(format!("Use of undeclared variable '{}'", name))
                 }
@@ -210,5 +221,108 @@ impl<'a> Validator<'a> {
                 })
             }
         }
+    }
+
+    fn push_scope(&mut self, m: HashMap<String, String>) {
+        self.scope.push(m);
+    }
+    fn exit_scope(&mut self) {
+        self.scope.pop();
+    }
+    fn find_variable(&self, variable_vec: &[HashMap<String, String>], key: &str) -> Option<String> {
+        variable_vec
+            .iter()
+            .rev()
+            .find_map(|map| map.get(key).cloned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::UniqueIdGenerator;
+    use crate::lexer::{Lexer, Token};
+    use crate::parser::Parser;
+
+    // 一个辅助函数，用于快速运行完整的 词法->语法->语义分析 流程
+    fn validate_source(source: &str) -> Result<Program, String> {
+        let lexer = Lexer::new(source);
+        let tokens: Vec<Token> = lexer.collect::<Result<_, _>>().unwrap();
+        println!("{:#?}", tokens); // 打印出 tokens 方便查看
+        let ast = Parser::new(&tokens).parse().unwrap();
+        let mut id_gen = UniqueIdGenerator::new();
+        let mut validator = Validator::new(&mut id_gen);
+        validator.validate_program(ast)
+    }
+
+    #[test]
+    fn test_variable_shadowing_and_scopes() {
+        let source_code = r#"
+            int main(void) {
+                int x = 1;      
+                int y = x;     
+                {
+                    int x = 2;  
+                    y = x;      
+                }
+                return x; 
+            }
+        "#;
+
+        let validated_ast = validate_source(source_code).expect("Validation should succeed");
+
+        // 我们来深入检查 AST，确保变量名被正确替换
+        let function_body = &validated_ast.function.body.blocks;
+
+        // 1. int x = 1; -> decl "x.0"
+        let decl_x0 = match &function_body[0] {
+            BlockItem::D(d) => d,
+            _ => panic!("Expected declaration"),
+        };
+        assert_eq!(decl_x0.name, "x.0");
+
+        // 2. int y = x; -> decl "y.1", init uses "x.0"
+        let decl_y1 = match &function_body[1] {
+            BlockItem::D(d) => d,
+            _ => panic!("Expected declaration"),
+        };
+        assert_eq!(decl_y1.name, "y.1");
+        let init_y1 = decl_y1.init.as_ref().unwrap();
+        assert_eq!(*init_y1, Expression::Var("x.0".to_string()));
+
+        // 3. { ... } -> Compound Statement
+        let compound_stmt = match &function_body[2] {
+            BlockItem::S(Statement::Compound(b)) => b,
+            _ => panic!("Expected compound statement"),
+        };
+        let inner_items = &compound_stmt.blocks;
+
+        // 3a. int x = 2; -> decl "x.2"
+        let decl_x2 = match &inner_items[0] {
+            BlockItem::D(d) => d,
+            _ => panic!("Expected inner declaration"),
+        };
+        assert_eq!(decl_x2.name, "x.2");
+
+        // 3b. y = x; -> Assignment, lhs is "y.1", rhs is "x.2"
+        let assign_stmt = match &inner_items[1] {
+            BlockItem::S(Statement::Expression(e)) => e,
+            _ => panic!("Expected expression statement"),
+        };
+        if let Expression::Assign { left, right } = assign_stmt {
+            assert_eq!(**left, Expression::Var("y.1".to_string()));
+            assert_eq!(**right, Expression::Var("x.2".to_string()));
+        } else {
+            panic!("Expected assignment expression");
+        }
+
+        // 4. return x; -> Return, uses "x.0"
+        let return_stmt = match &function_body[3] {
+            BlockItem::S(Statement::Return(e)) => e,
+            _ => panic!("Expected return statement"),
+        };
+        assert_eq!(*return_stmt, Expression::Var("x.0".to_string()));
+
+        println!("--- Variable Shadowing Test Passed! ---");
     }
 }
