@@ -1,6 +1,6 @@
 // src/backend/tacky_gen.rs
 
-use crate::ast::unchecked;
+use crate::ast::checked;
 // 导入我们需要的数据结构
 use crate::common::UniqueIdGenerator;
 use crate::ir::tacky;
@@ -36,36 +36,36 @@ impl<'a> TackyGenerator<'a> {
         label
     }
 
-    /// 将 unchecked AST 中的 UnaryOperator 转换为 tacky IR 中的 UnaryOperator。
-    fn convert_unop(&self, op: &unchecked::UnaryOperator) -> tacky::UnaryOperator {
+    /// 将 checked AST 中的 UnaryOperator 转换为 tacky IR 中的 UnaryOperator。
+    fn convert_unop(&self, op: &checked::UnaryOperator) -> tacky::UnaryOperator {
         match op {
-            unchecked::UnaryOperator::Negate => tacky::UnaryOperator::Negate,
-            unchecked::UnaryOperator::Complement => tacky::UnaryOperator::Complement,
-            unchecked::UnaryOperator::Not => tacky::UnaryOperator::Not,
+            checked::UnaryOperator::Negate => tacky::UnaryOperator::Negate,
+            checked::UnaryOperator::Complement => tacky::UnaryOperator::Complement,
+            checked::UnaryOperator::Not => tacky::UnaryOperator::Not,
         }
     }
 
-    /// 【修改】将 unchecked AST 中的 BinaryOperator 转换为 tacky IR 中的 BinaryOperator。
+    /// 【修改】将 checked AST 中的 BinaryOperator 转换为 tacky IR 中的 BinaryOperator。
     /// 注意：这个函数只处理非短路的二元运算符。
     fn convert_binaryop(
         &self,
-        op: &unchecked::BinaryOperator,
+        op: &checked::BinaryOperator,
     ) -> Result<tacky::BinaryOperator, String> {
         match op {
-            unchecked::BinaryOperator::Add => Ok(tacky::BinaryOperator::Add),
-            unchecked::BinaryOperator::Subtract => Ok(tacky::BinaryOperator::Subtract),
-            unchecked::BinaryOperator::Multiply => Ok(tacky::BinaryOperator::Multiply),
-            unchecked::BinaryOperator::Divide => Ok(tacky::BinaryOperator::Divide),
-            unchecked::BinaryOperator::Remainder => Ok(tacky::BinaryOperator::Remainder),
+            checked::BinaryOperator::Add => Ok(tacky::BinaryOperator::Add),
+            checked::BinaryOperator::Subtract => Ok(tacky::BinaryOperator::Subtract),
+            checked::BinaryOperator::Multiply => Ok(tacky::BinaryOperator::Multiply),
+            checked::BinaryOperator::Divide => Ok(tacky::BinaryOperator::Divide),
+            checked::BinaryOperator::Remainder => Ok(tacky::BinaryOperator::Remainder),
             // 新增的关系运算符
-            unchecked::BinaryOperator::Equal => Ok(tacky::BinaryOperator::Equal),
-            unchecked::BinaryOperator::NotEqual => Ok(tacky::BinaryOperator::NotEqual),
-            unchecked::BinaryOperator::LessThan => Ok(tacky::BinaryOperator::LessThan),
-            unchecked::BinaryOperator::LessOrEqual => Ok(tacky::BinaryOperator::LessOrEqual),
-            unchecked::BinaryOperator::GreaterThan => Ok(tacky::BinaryOperator::GreaterThan),
-            unchecked::BinaryOperator::GreaterOrEqual => Ok(tacky::BinaryOperator::GreaterEqual),
+            checked::BinaryOperator::Equal => Ok(tacky::BinaryOperator::Equal),
+            checked::BinaryOperator::NotEqual => Ok(tacky::BinaryOperator::NotEqual),
+            checked::BinaryOperator::LessThan => Ok(tacky::BinaryOperator::LessThan),
+            checked::BinaryOperator::LessOrEqual => Ok(tacky::BinaryOperator::LessOrEqual),
+            checked::BinaryOperator::GreaterThan => Ok(tacky::BinaryOperator::GreaterThan),
+            checked::BinaryOperator::GreaterOrEqual => Ok(tacky::BinaryOperator::GreaterEqual),
             // And 和 Or 是特殊情况，不应通过此函数处理
-            unchecked::BinaryOperator::And | unchecked::BinaryOperator::Or => Err(
+            checked::BinaryOperator::And | checked::BinaryOperator::Or => Err(
                 "Logical AND/OR should be handled separately and not converted directly."
                     .to_string(),
             ),
@@ -73,7 +73,7 @@ impl<'a> TackyGenerator<'a> {
     }
     fn generate_tacky_for_block(
         &mut self,
-        block: &unchecked::Block, // 接收一个对 Block 的引用
+        block: &checked::Block,                     // 接收一个对 Block 的引用
         instructions: &mut Vec<tacky::Instruction>, // 修改传入的主指令列表
     ) -> Result<(), String> {
         for item in &block.blocks {
@@ -85,19 +85,19 @@ impl<'a> TackyGenerator<'a> {
     /// 【核心修改】将一个表达式 AST 节点转换为 TACKY 指令列表。
     fn generate_tacky_for_expression(
         &mut self,
-        exp: &unchecked::Expression,
+        exp: &checked::Expression,
         instructions: &mut Vec<tacky::Instruction>,
     ) -> Result<tacky::Val, String> {
         match exp {
             // 经过语义分析后，变量名已经是唯一的了。
-            unchecked::Expression::Var(name) => Ok(tacky::Val::Var(name.clone())),
-            unchecked::Expression::Assign { left, right } => {
+            checked::Expression::Var(name) => Ok(tacky::Val::Var(name.clone())),
+            checked::Expression::Assign { left, right } => {
                 // 赋值表达式的结果是右侧的值
                 // 首先计算右侧表达式的值
                 let rhs_val = self.generate_tacky_for_expression(right, instructions)?;
 
                 // 左侧必须是变量（这在语义分析阶段已保证）
-                if let unchecked::Expression::Var(var_name) = &**left {
+                if let checked::Expression::Var(var_name) = &**left {
                     let dst_var = tacky::Val::Var(var_name.clone());
                     // 生成 Copy 指令
                     instructions.push(tacky::Instruction::Copy {
@@ -112,8 +112,8 @@ impl<'a> TackyGenerator<'a> {
                 }
             }
 
-            unchecked::Expression::Constant(i) => Ok(tacky::Val::Constant(*i)),
-            unchecked::Expression::Unary {
+            checked::Expression::Constant(i) => Ok(tacky::Val::Constant(*i)),
+            checked::Expression::Unary {
                 operator,
                 expression,
             } => {
@@ -129,14 +129,14 @@ impl<'a> TackyGenerator<'a> {
                 Ok(dst)
             }
             // 【修改】对二元运算符进行分支处理
-            unchecked::Expression::Binary {
+            checked::Expression::Binary {
                 operator,
                 left,
                 right,
             } => {
                 match operator {
                     // --- Case 1: 逻辑与 (&&) ---
-                    unchecked::BinaryOperator::And => {
+                    checked::BinaryOperator::And => {
                         // 创建最终存放结果的临时变量
                         let result_var_name = self.make_temporary();
                         let result_var = tacky::Val::Var(result_var_name);
@@ -184,7 +184,7 @@ impl<'a> TackyGenerator<'a> {
 
                     // --- Case 2: 逻辑或 (||) ---
                     // 这个逻辑留给你自己实现，但结构与 && 非常相似
-                    unchecked::BinaryOperator::Or => {
+                    checked::BinaryOperator::Or => {
                         let result_var_name = self.make_temporary();
                         let result_var = tacky::Val::Var(result_var_name);
 
@@ -252,7 +252,7 @@ impl<'a> TackyGenerator<'a> {
                     }
                 }
             }
-            unchecked::Expression::Conditional {
+            checked::Expression::Conditional {
                 condition,
                 left,
                 right,
@@ -303,12 +303,12 @@ impl<'a> TackyGenerator<'a> {
     /// 【新增】为单个块项目生成 TACKY 指令
     fn generate_tacky_for_block_item(
         &mut self,
-        item: &unchecked::BlockItem,
+        item: &checked::BlockItem,
         instructions: &mut Vec<tacky::Instruction>,
     ) -> Result<(), String> {
         match item {
             // 如果是声明
-            unchecked::BlockItem::D(declaration) => {
+            checked::BlockItem::D(declaration) => {
                 // 只处理有初始化器的声明
                 if let Some(init_expr) = &declaration.init {
                     // 这等同于一个赋值语句: `var = init_expr`
@@ -323,7 +323,7 @@ impl<'a> TackyGenerator<'a> {
                 Ok(())
             }
             // 如果是语句
-            unchecked::BlockItem::S(statement) => {
+            checked::BlockItem::S(statement) => {
                 self.generate_tacky_for_statement(statement, instructions)
             }
         }
@@ -332,28 +332,28 @@ impl<'a> TackyGenerator<'a> {
     /// 【修改】将一个语句 AST 节点转换为 TACKY 指令。
     fn generate_tacky_for_statement(
         &mut self,
-        stmt: &unchecked::Statement,
+        stmt: &checked::Statement,
         instructions: &mut Vec<tacky::Instruction>,
     ) -> Result<(), String> {
         match stmt {
-            unchecked::Statement::Return(exp) => {
+            checked::Statement::Return(exp) => {
                 let return_val = self.generate_tacky_for_expression(exp, instructions)?;
                 instructions.push(tacky::Instruction::Return(return_val));
                 Ok(())
             }
             // 【新增】处理表达式语句
-            unchecked::Statement::Expression(exp) => {
+            checked::Statement::Expression(exp) => {
                 // 我们需要为表达式生成指令，但可以忽略其结果。
                 // 例如，对于 "a * 2;"，我们仍然计算它，但结果不用于任何地方。
                 self.generate_tacky_for_expression(exp, instructions)?;
                 Ok(())
             }
             // 【新增】处理空语句
-            unchecked::Statement::Empty => {
+            checked::Statement::Empty => {
                 // 空语句不产生任何 TACKY 指令
                 Ok(())
             }
-            unchecked::Statement::If {
+            checked::Statement::If {
                 condition,
                 then_stat,
                 else_stat,
@@ -408,7 +408,7 @@ impl<'a> TackyGenerator<'a> {
                 }
                 Ok(())
             }
-            unchecked::Statement::Compound(b) => self.generate_tacky_for_block(b, instructions),
+            checked::Statement::Compound(b) => self.generate_tacky_for_block(b, instructions),
             _ => {
                 panic!()
             }
@@ -417,7 +417,7 @@ impl<'a> TackyGenerator<'a> {
     /// 将一个函数 AST 节点转换为 TACKY 函数。 (无需修改)
     fn generate_tacky_for_function(
         &mut self,
-        func: &unchecked::Function,
+        func: &checked::Function,
     ) -> Result<tacky::Function, String> {
         let mut instructions = Vec::new();
         // 1. 【优化】直接调用新的辅助函数来处理函数体
@@ -435,7 +435,7 @@ impl<'a> TackyGenerator<'a> {
     }
 
     /// 主入口：将整个 C 程序 AST 转换为 TACKY 程序。 (无需修改)
-    pub fn generate_tacky(&mut self, c_ast: unchecked::Program) -> Result<tacky::Program, String> {
+    pub fn generate_tacky(&mut self, c_ast: checked::Program) -> Result<tacky::Program, String> {
         let tacky_function = self.generate_tacky_for_function(&c_ast.function)?;
         Ok(tacky::Program {
             function: tacky_function,

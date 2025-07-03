@@ -157,8 +157,55 @@ impl<'a> Validator<'a> {
                 let validated_block = self.validate_block(b)?;
                 Ok(Statement::Compound(validated_block))
             }
-            _ => {
-                panic!()
+            Statement::While { condition, body } => {
+                let validated_condition = self.validate_expression(condition)?;
+                let validated_body = self.validate_statement(*body)?;
+                Ok(Statement::While {
+                    condition: validated_condition,
+                    body: Box::new(validated_body),
+                })
+            }
+            Statement::DoWhile { body, condition } => {
+                let validated_condition = self.validate_expression(condition)?;
+                let validated_body = self.validate_statement(*body)?;
+                Ok(Statement::DoWhile {
+                    condition: validated_condition,
+                    body: Box::new(validated_body),
+                })
+            }
+            Statement::Break => Ok(Statement::Break),
+            Statement::Continue => Ok(Statement::Continue),
+            Statement::For {
+                init,
+                condition,
+                post,
+                body,
+            } => {
+                self.enter_scope();
+                // 1. 验证初始化部分 (它在这个新作用域内)
+                let validated_init = match init {
+                    Some(item) => Some(Box::new(self.validate_block_item(*item)?)),
+                    None => None,
+                };
+                // 2. 验证条件部分 (可以访问初始化中声明的变量)
+                let validated_condition = match condition {
+                    Some(expr) => Some(self.validate_expression(expr)?),
+                    None => None,
+                };
+                // 3. 验证循环后表达式
+                let validated_post = match post {
+                    Some(expr) => Some(self.validate_expression(expr)?),
+                    None => None,
+                };
+                // 4. 验证循环体
+                let validated_body = Box::new(self.validate_statement(*body)?);
+                self.exit_scope(); // 销毁 for 循环的作用域
+                Ok(Statement::For {
+                    init: validated_init,
+                    condition: validated_condition,
+                    post: validated_post,
+                    body: validated_body,
+                })
             }
         }
     }
@@ -332,5 +379,92 @@ mod tests {
         assert_eq!(*return_stmt, Expression::Var("x.0".to_string()));
 
         println!("--- Variable Shadowing Test Passed! ---");
+    }
+    #[test]
+    fn test_loop_scoping_and_variables() {
+        // 这个测试用例检查 for 循环的特殊作用域规则
+        let source_code = r#"
+        int main(void) {
+            int a = 10;
+            int i = 0; 
+            for (int i = 0; i < a; i = i + 1) { 
+                int b = i;
+            }
+            return i;
+        }
+    "#;
+
+        let validated_ast = validate_source(source_code).expect("Validation should succeed");
+        let function_body = &validated_ast.function.body.blocks;
+
+        // 1. int a = 10; -> a.0
+        let decl_a0 = &function_body[0];
+        assert!(matches!(decl_a0, BlockItem::D(Declaration { name, .. }) if name == "a.0"));
+
+        // 2. int i = 0; -> i.1 (外层 i)
+        let decl_i1 = &function_body[1];
+        assert!(matches!(decl_i1, BlockItem::D(Declaration { name, .. }) if name == "i.1"));
+
+        // 3. for (...) { ... }
+        if let BlockItem::S(Statement::For {
+            init,
+            condition,
+            post,
+            body,
+        }) = &function_body[2]
+        {
+            // 3a. for(int i = 0; ...) -> init 声明了 i.2
+            if let Some(init_item) = init {
+                if let BlockItem::D(decl) = &**init_item {
+                    assert_eq!(decl.name, "i.2");
+                } else {
+                    panic!("Expected declaration in for init");
+                }
+            } else {
+                panic!("Expected for init");
+            }
+
+            // 3b. ...; i < a; ... -> condition 使用 i.2 和 a.0
+            if let Some(Expression::Binary { left, right, .. }) = condition {
+                assert_eq!(**left, Expression::Var("i.2".to_string()));
+                assert_eq!(**right, Expression::Var("a.0".to_string()));
+            } else {
+                panic!("Expected binary expression in condition");
+            }
+
+            // 3c. ...; i = i + 1 -> post 使用 i.2
+            if let Some(Expression::Assign { left, .. }) = post {
+                assert_eq!(**left, Expression::Var("i.2".to_string()));
+            } else {
+                panic!("Expected assignment in post-expression");
+            }
+
+            // 3d. for (...) { int b = i; } -> body 使用 i.2
+            if let Statement::Compound(block) = &**body {
+                if let BlockItem::D(decl_b) = &block.blocks[0] {
+                    assert_eq!(decl_b.name, "b.3");
+                    if let Some(Expression::Var(name)) = &decl_b.init {
+                        assert_eq!(*name, "i.2");
+                    } else {
+                        panic!("Expected var in inner decl init");
+                    }
+                } else {
+                    panic!("Expected inner declaration");
+                }
+            } else {
+                panic!("Expected compound statement for body");
+            }
+        } else {
+            panic!("Expected a for loop");
+        }
+
+        // 4. return i; -> 使用外层的 i.1
+        if let BlockItem::S(Statement::Return(expr)) = &function_body[3] {
+            assert_eq!(*expr, Expression::Var("i.1".to_string()));
+        } else {
+            panic!("Expected a return statement");
+        }
+
+        println!("--- Loop Scoping Test Passed! ---");
     }
 }

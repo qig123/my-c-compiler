@@ -5,6 +5,7 @@ use my_c_compiler::backend::{asm_gen::AsmGenerator, emitter, tacky_gen::TackyGen
 use my_c_compiler::common::UniqueIdGenerator;
 use my_c_compiler::lexer::{self, Token};
 use my_c_compiler::parser as CParser;
+use my_c_compiler::semantics::loop_labeler::LoopLabeler;
 use my_c_compiler::semantics::validator::Validator;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -94,12 +95,17 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // --- 【新增】STAGE 4: SEMANTIC ANALYSIS (VALIDATION) ---
     println!("\n4. Performing semantic analysis (validation)...");
     let mut validator = Validator::new(&mut id_generator);
-    let validated_ast = validator.validate_program(c_ast)?; // c_ast is consumed
+    let name_resolved_ast = validator.validate_program(c_ast)?; // c_ast is consumed
+    // println!("\n--- 2. Name-Resolved AST ---\n{:#?}", name_resolved_ast);
+    // 4. Loop Labeling -> checked AST
+    let mut labeler = LoopLabeler::new(&mut id_generator);
+    let checked_ast = labeler.label_program(name_resolved_ast).unwrap();
+    // println!("\n--- 3. Checked (Labeled) AST ---\n{:#?}", checked_ast);
     println!("   ✓ Semantic analysis successful.");
     if cli.validate {
         println!(
             "--- Validated C AST ---\n{:#?}\n---------------------",
-            validated_ast
+            checked_ast
         );
         println!("\nHalting as requested by --validate.");
         fs::remove_file(&preprocessed_path)?;
@@ -109,7 +115,7 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     println!("\n5. Generating TACKY Intermediate Representation (IR)...");
     let mut tacky_generator = TackyGenerator::new(&mut id_generator);
     // 【修改】使用 validated_ast 而不是 c_ast
-    let tacky_ir = tacky_generator.generate_tacky(validated_ast)?; // validated_ast is consumed
+    let tacky_ir = tacky_generator.generate_tacky(checked_ast)?; // validated_ast is consumed
     println!("   ✓ TACKY IR generation successful.");
     if cli.tacky {
         println!(
