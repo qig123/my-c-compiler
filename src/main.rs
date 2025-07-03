@@ -1,6 +1,7 @@
 // src/main.rs
 
 use clap::Parser as ClapParser;
+use my_c_compiler::backend::tacky_gen::TackyGenerator;
 // use my_c_compiler::backend::{asm_gen::AsmGenerator, emitter, tacky_gen::TackyGenerator};
 use my_c_compiler::common::UniqueIdGenerator;
 use my_c_compiler::lexer::{self, Token};
@@ -127,13 +128,20 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
-
     // // --- STAGE 5 & 6 & 7: CODE GENERATION ---
-    // println!("\n5. Generating TACKY Intermediate Representation (IR)...");
-    // let mut tacky_generator = TackyGenerator::new(&mut id_generator);
-    // let tacky_ir = tacky_generator.generate_tacky(checked_ast)?;
-    // println!("   ✓ TACKY IR generation successful.");
-    // if cli.tacky { /* ... */ }
+    println!("\n5. Generating TACKY Intermediate Representation (IR)...");
+    let mut tacky_generator = TackyGenerator::new(&mut id_generator);
+    let tacky_ir = tacky_generator.generate_tacky(checked_ast)?;
+    println!("   ✓ TACKY IR generation successful.");
+    if cli.tacky {
+        println!(
+            "--- Generated TACKY IR ---\n{:#?}\n------------------------",
+            tacky_ir
+        );
+        println!("\nHalting as requested by --tacky.");
+        fs::remove_file(&preprocessed_path)?;
+        return Ok(());
+    }
 
     // println!("\n6. Generating Assembly AST from TACKY IR...");
     // let mut asm_generator = AsmGenerator::new();

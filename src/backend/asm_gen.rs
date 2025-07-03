@@ -1,408 +1,408 @@
-// src/backend/asm_gen.rs
+// // src/backend/asm_gen.rs
 
-use crate::ir::{assembly, tacky};
-use std::collections::HashMap;
+// use crate::ir::{assembly, tacky};
+// use std::collections::HashMap;
 
-/// 负责将 TACKY IR 转换为最终的汇编 AST。
-/// 这个过程分为三个阶段。
-pub struct AsmGenerator {
-    // 这个结构体现在是无状态的，因为所有状态都在方法调用之间传递。
-}
+// /// 负责将 TACKY IR 转换为最终的汇编 AST。
+// /// 这个过程分为三个阶段。
+// pub struct AsmGenerator {
+//     // 这个结构体现在是无状态的，因为所有状态都在方法调用之间传递。
+// }
 
-impl AsmGenerator {
-    pub fn new() -> Self {
-        AsmGenerator {}
-    }
+// impl AsmGenerator {
+//     pub fn new() -> Self {
+//         AsmGenerator {}
+//     }
 
-    /// 主入口：将 TACKY 程序转换为汇编程序。
-    pub fn generate_assembly(
-        &mut self,
-        tacky_program: tacky::Program,
-    ) -> Result<assembly::Program, String> {
-        // --- PASS 1: TACKY -> Assembly with Pseudoregisters ---
-        let mut asm_func = self.convert_tacky_to_asm_pass1(&tacky_program.function)?;
+//     /// 主入口：将 TACKY 程序转换为汇编程序。
+//     pub fn generate_assembly(
+//         &mut self,
+//         tacky_program: tacky::Program,
+//     ) -> Result<assembly::Program, String> {
+//         // --- PASS 1: TACKY -> Assembly with Pseudoregisters ---
+//         let mut asm_func = self.convert_tacky_to_asm_pass1(&tacky_program.function)?;
 
-        // --- PASS 2: Replace Pseudoregisters -> Stack slots ---
-        let stack_bytes_needed = self.replace_pseudo_with_stack_pass2(&mut asm_func)?;
+//         // --- PASS 2: Replace Pseudoregisters -> Stack slots ---
+//         let stack_bytes_needed = self.replace_pseudo_with_stack_pass2(&mut asm_func)?;
 
-        // --- PASS 3: Fix up instructions ---
-        self.fixup_instructions_pass3(&mut asm_func, stack_bytes_needed);
+//         // --- PASS 3: Fix up instructions ---
+//         self.fixup_instructions_pass3(&mut asm_func, stack_bytes_needed);
 
-        Ok(assembly::Program { function: asm_func })
-    }
+//         Ok(assembly::Program { function: asm_func })
+//     }
 
-    // =================================================================
-    // PASS 1: Convert TACKY to Assembly with Pseudoregisters
-    // =================================================================
+//     // =================================================================
+//     // PASS 1: Convert TACKY to Assembly with Pseudoregisters
+//     // =================================================================
 
-    fn convert_tacky_to_asm_pass1(
-        &self,
-        tacky_func: &tacky::Function,
-    ) -> Result<assembly::Function, String> {
-        let mut instructions = Vec::new();
-        for tacky_inst in &tacky_func.body {
-            match tacky_inst {
-                // --- 简单直接的转换 ---
-                tacky::Instruction::Return(val) => {
-                    instructions.push(assembly::Instruction::Mov {
-                        src: self.convert_tacky_val(val),
-                        dst: assembly::Operand::Reg(assembly::Register::AX),
-                    });
-                    instructions.push(assembly::Instruction::Ret);
-                }
-                tacky::Instruction::Copy { src, dst } => {
-                    instructions.push(assembly::Instruction::Mov {
-                        src: self.convert_tacky_val(src),
-                        dst: self.convert_tacky_val(dst),
-                    });
-                }
-                tacky::Instruction::Jump(target) => {
-                    instructions.push(assembly::Instruction::Jmp(target.clone()));
-                }
-                tacky::Instruction::Label(name) => {
-                    instructions.push(assembly::Instruction::Label(name.clone()));
-                }
+//     fn convert_tacky_to_asm_pass1(
+//         &self,
+//         tacky_func: &tacky::Function,
+//     ) -> Result<assembly::Function, String> {
+//         let mut instructions = Vec::new();
+//         for tacky_inst in &tacky_func.body {
+//             match tacky_inst {
+//                 // --- 简单直接的转换 ---
+//                 tacky::Instruction::Return(val) => {
+//                     instructions.push(assembly::Instruction::Mov {
+//                         src: self.convert_tacky_val(val),
+//                         dst: assembly::Operand::Reg(assembly::Register::AX),
+//                     });
+//                     instructions.push(assembly::Instruction::Ret);
+//                 }
+//                 tacky::Instruction::Copy { src, dst } => {
+//                     instructions.push(assembly::Instruction::Mov {
+//                         src: self.convert_tacky_val(src),
+//                         dst: self.convert_tacky_val(dst),
+//                     });
+//                 }
+//                 tacky::Instruction::Jump(target) => {
+//                     instructions.push(assembly::Instruction::Jmp(target.clone()));
+//                 }
+//                 tacky::Instruction::Label(name) => {
+//                     instructions.push(assembly::Instruction::Label(name.clone()));
+//                 }
 
-                // --- 涉及比较和跳转的转换 ---
-                tacky::Instruction::JumpIfZero { condition, target } => {
-                    instructions.push(assembly::Instruction::Cmp {
-                        src1: assembly::Operand::Imm(0),
-                        src2: self.convert_tacky_val(condition),
-                    });
-                    instructions.push(assembly::Instruction::JmpCC(
-                        assembly::CondCode::E,
-                        target.clone(),
-                    ));
-                }
-                tacky::Instruction::JumpIfNotZero { condition, target } => {
-                    instructions.push(assembly::Instruction::Cmp {
-                        src1: assembly::Operand::Imm(0),
-                        src2: self.convert_tacky_val(condition),
-                    });
-                    instructions.push(assembly::Instruction::JmpCC(
-                        assembly::CondCode::NE,
-                        target.clone(),
-                    ));
-                }
+//                 // --- 涉及比较和跳转的转换 ---
+//                 tacky::Instruction::JumpIfZero { condition, target } => {
+//                     instructions.push(assembly::Instruction::Cmp {
+//                         src1: assembly::Operand::Imm(0),
+//                         src2: self.convert_tacky_val(condition),
+//                     });
+//                     instructions.push(assembly::Instruction::JmpCC(
+//                         assembly::CondCode::E,
+//                         target.clone(),
+//                     ));
+//                 }
+//                 tacky::Instruction::JumpIfNotZero { condition, target } => {
+//                     instructions.push(assembly::Instruction::Cmp {
+//                         src1: assembly::Operand::Imm(0),
+//                         src2: self.convert_tacky_val(condition),
+//                     });
+//                     instructions.push(assembly::Instruction::JmpCC(
+//                         assembly::CondCode::NE,
+//                         target.clone(),
+//                     ));
+//                 }
 
-                // --- 运算符转换 ---
-                tacky::Instruction::Unary { op, src, dst } => {
-                    let dst_operand = self.convert_tacky_val(dst);
-                    match op {
-                        tacky::UnaryOperator::Not => {
-                            // `!x` is equivalent to `x == 0`
-                            instructions.push(assembly::Instruction::Cmp {
-                                src1: assembly::Operand::Imm(0),
-                                src2: self.convert_tacky_val(src),
-                            });
-                            instructions.push(assembly::Instruction::Mov {
-                                // Zero out dst
-                                src: assembly::Operand::Imm(0),
-                                dst: dst_operand.clone(),
-                            });
-                            instructions.push(assembly::Instruction::SetCC(
-                                assembly::CondCode::E,
-                                dst_operand,
-                            ));
-                        }
-                        tacky::UnaryOperator::Negate | tacky::UnaryOperator::Complement => {
-                            let asm_op = match op {
-                                tacky::UnaryOperator::Negate => assembly::UnaryOperator::Neg,
-                                tacky::UnaryOperator::Complement => assembly::UnaryOperator::Not,
-                                _ => unreachable!(),
-                            };
-                            instructions.push(assembly::Instruction::Mov {
-                                src: self.convert_tacky_val(src),
-                                dst: dst_operand.clone(),
-                            });
-                            instructions.push(assembly::Instruction::Unary {
-                                op: asm_op,
-                                operand: dst_operand,
-                            });
-                        }
-                    }
-                }
-                tacky::Instruction::Binary {
-                    op,
-                    src1,
-                    src2,
-                    dst,
-                } => {
-                    let dst_operand = self.convert_tacky_val(dst);
-                    let src1_operand = self.convert_tacky_val(src1);
-                    let src2_operand = self.convert_tacky_val(src2);
+//                 // --- 运算符转换 ---
+//                 tacky::Instruction::Unary { op, src, dst } => {
+//                     let dst_operand = self.convert_tacky_val(dst);
+//                     match op {
+//                         tacky::UnaryOperator::Not => {
+//                             // `!x` is equivalent to `x == 0`
+//                             instructions.push(assembly::Instruction::Cmp {
+//                                 src1: assembly::Operand::Imm(0),
+//                                 src2: self.convert_tacky_val(src),
+//                             });
+//                             instructions.push(assembly::Instruction::Mov {
+//                                 // Zero out dst
+//                                 src: assembly::Operand::Imm(0),
+//                                 dst: dst_operand.clone(),
+//                             });
+//                             instructions.push(assembly::Instruction::SetCC(
+//                                 assembly::CondCode::E,
+//                                 dst_operand,
+//                             ));
+//                         }
+//                         tacky::UnaryOperator::Negate | tacky::UnaryOperator::Complement => {
+//                             let asm_op = match op {
+//                                 tacky::UnaryOperator::Negate => assembly::UnaryOperator::Neg,
+//                                 tacky::UnaryOperator::Complement => assembly::UnaryOperator::Not,
+//                                 _ => unreachable!(),
+//                             };
+//                             instructions.push(assembly::Instruction::Mov {
+//                                 src: self.convert_tacky_val(src),
+//                                 dst: dst_operand.clone(),
+//                             });
+//                             instructions.push(assembly::Instruction::Unary {
+//                                 op: asm_op,
+//                                 operand: dst_operand,
+//                             });
+//                         }
+//                     }
+//                 }
+//                 tacky::Instruction::Binary {
+//                     op,
+//                     src1,
+//                     src2,
+//                     dst,
+//                 } => {
+//                     let dst_operand = self.convert_tacky_val(dst);
+//                     let src1_operand = self.convert_tacky_val(src1);
+//                     let src2_operand = self.convert_tacky_val(src2);
 
-                    match op {
-                        // 关系运算符
-                        tacky::BinaryOperator::Equal
-                        | tacky::BinaryOperator::NotEqual
-                        | tacky::BinaryOperator::LessThan
-                        | tacky::BinaryOperator::LessOrEqual
-                        | tacky::BinaryOperator::GreaterThan
-                        | tacky::BinaryOperator::GreaterEqual => {
-                            let cond_code = match op {
-                                tacky::BinaryOperator::Equal => assembly::CondCode::E,
-                                tacky::BinaryOperator::NotEqual => assembly::CondCode::NE,
-                                tacky::BinaryOperator::LessThan => assembly::CondCode::L,
-                                tacky::BinaryOperator::LessOrEqual => assembly::CondCode::LE,
-                                tacky::BinaryOperator::GreaterThan => assembly::CondCode::G,
-                                tacky::BinaryOperator::GreaterEqual => assembly::CondCode::GE,
-                                _ => unreachable!(),
-                            };
-                            instructions.push(assembly::Instruction::Cmp {
-                                src1: src2_operand,
-                                src2: src1_operand,
-                            });
-                            instructions.push(assembly::Instruction::Mov {
-                                src: assembly::Operand::Imm(0),
-                                dst: dst_operand.clone(),
-                            });
-                            instructions.push(assembly::Instruction::SetCC(cond_code, dst_operand));
-                        }
-                        // 算术运算符
-                        // 【修复】填充除法逻辑
-                        tacky::BinaryOperator::Divide => {
-                            instructions.push(assembly::Instruction::Mov {
-                                src: src1_operand,
-                                dst: assembly::Operand::Reg(assembly::Register::AX),
-                            });
-                            instructions.push(assembly::Instruction::Cdq);
-                            instructions.push(assembly::Instruction::Idiv(src2_operand));
-                            instructions.push(assembly::Instruction::Mov {
-                                src: assembly::Operand::Reg(assembly::Register::AX),
-                                dst: dst_operand,
-                            });
-                        }
+//                     match op {
+//                         // 关系运算符
+//                         tacky::BinaryOperator::Equal
+//                         | tacky::BinaryOperator::NotEqual
+//                         | tacky::BinaryOperator::LessThan
+//                         | tacky::BinaryOperator::LessOrEqual
+//                         | tacky::BinaryOperator::GreaterThan
+//                         | tacky::BinaryOperator::GreaterEqual => {
+//                             let cond_code = match op {
+//                                 tacky::BinaryOperator::Equal => assembly::CondCode::E,
+//                                 tacky::BinaryOperator::NotEqual => assembly::CondCode::NE,
+//                                 tacky::BinaryOperator::LessThan => assembly::CondCode::L,
+//                                 tacky::BinaryOperator::LessOrEqual => assembly::CondCode::LE,
+//                                 tacky::BinaryOperator::GreaterThan => assembly::CondCode::G,
+//                                 tacky::BinaryOperator::GreaterEqual => assembly::CondCode::GE,
+//                                 _ => unreachable!(),
+//                             };
+//                             instructions.push(assembly::Instruction::Cmp {
+//                                 src1: src2_operand,
+//                                 src2: src1_operand,
+//                             });
+//                             instructions.push(assembly::Instruction::Mov {
+//                                 src: assembly::Operand::Imm(0),
+//                                 dst: dst_operand.clone(),
+//                             });
+//                             instructions.push(assembly::Instruction::SetCC(cond_code, dst_operand));
+//                         }
+//                         // 算术运算符
+//                         // 【修复】填充除法逻辑
+//                         tacky::BinaryOperator::Divide => {
+//                             instructions.push(assembly::Instruction::Mov {
+//                                 src: src1_operand,
+//                                 dst: assembly::Operand::Reg(assembly::Register::AX),
+//                             });
+//                             instructions.push(assembly::Instruction::Cdq);
+//                             instructions.push(assembly::Instruction::Idiv(src2_operand));
+//                             instructions.push(assembly::Instruction::Mov {
+//                                 src: assembly::Operand::Reg(assembly::Register::AX),
+//                                 dst: dst_operand,
+//                             });
+//                         }
 
-                        // 【修复】填充取余逻辑
-                        tacky::BinaryOperator::Remainder => {
-                            instructions.push(assembly::Instruction::Mov {
-                                src: src1_operand,
-                                dst: assembly::Operand::Reg(assembly::Register::AX),
-                            });
-                            instructions.push(assembly::Instruction::Cdq);
-                            instructions.push(assembly::Instruction::Idiv(src2_operand));
-                            // 余数在 DX 寄存器
-                            instructions.push(assembly::Instruction::Mov {
-                                src: assembly::Operand::Reg(assembly::Register::DX),
-                                dst: dst_operand,
-                            });
-                        }
-                        tacky::BinaryOperator::Add
-                        | tacky::BinaryOperator::Subtract
-                        | tacky::BinaryOperator::Multiply => {
-                            let asm_op = match op {
-                                tacky::BinaryOperator::Add => assembly::BinaryOperator::Add,
-                                tacky::BinaryOperator::Subtract => {
-                                    assembly::BinaryOperator::Subtract
-                                }
-                                tacky::BinaryOperator::Multiply => {
-                                    assembly::BinaryOperator::Multiply
-                                }
-                                _ => unreachable!(),
-                            };
-                            instructions.push(assembly::Instruction::Mov {
-                                src: src1_operand,
-                                dst: dst_operand.clone(),
-                            });
-                            instructions.push(assembly::Instruction::Binary {
-                                op: asm_op,
-                                src: src2_operand,
-                                dst: dst_operand,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        Ok(assembly::Function {
-            name: tacky_func.name.clone(),
-            instructions,
-        })
-    }
+//                         // 【修复】填充取余逻辑
+//                         tacky::BinaryOperator::Remainder => {
+//                             instructions.push(assembly::Instruction::Mov {
+//                                 src: src1_operand,
+//                                 dst: assembly::Operand::Reg(assembly::Register::AX),
+//                             });
+//                             instructions.push(assembly::Instruction::Cdq);
+//                             instructions.push(assembly::Instruction::Idiv(src2_operand));
+//                             // 余数在 DX 寄存器
+//                             instructions.push(assembly::Instruction::Mov {
+//                                 src: assembly::Operand::Reg(assembly::Register::DX),
+//                                 dst: dst_operand,
+//                             });
+//                         }
+//                         tacky::BinaryOperator::Add
+//                         | tacky::BinaryOperator::Subtract
+//                         | tacky::BinaryOperator::Multiply => {
+//                             let asm_op = match op {
+//                                 tacky::BinaryOperator::Add => assembly::BinaryOperator::Add,
+//                                 tacky::BinaryOperator::Subtract => {
+//                                     assembly::BinaryOperator::Subtract
+//                                 }
+//                                 tacky::BinaryOperator::Multiply => {
+//                                     assembly::BinaryOperator::Multiply
+//                                 }
+//                                 _ => unreachable!(),
+//                             };
+//                             instructions.push(assembly::Instruction::Mov {
+//                                 src: src1_operand,
+//                                 dst: dst_operand.clone(),
+//                             });
+//                             instructions.push(assembly::Instruction::Binary {
+//                                 op: asm_op,
+//                                 src: src2_operand,
+//                                 dst: dst_operand,
+//                             });
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         Ok(assembly::Function {
+//             name: tacky_func.name.clone(),
+//             instructions,
+//         })
+//     }
 
-    /// 辅助函数：将 tacky::Val 转换为 assembly::Operand。
-    fn convert_tacky_val(&self, val: &tacky::Val) -> assembly::Operand {
-        match val {
-            tacky::Val::Constant(i) => assembly::Operand::Imm(*i),
-            tacky::Val::Var(name) => assembly::Operand::Pseudo(name.clone()),
-        }
-    }
+//     /// 辅助函数：将 tacky::Val 转换为 assembly::Operand。
+//     fn convert_tacky_val(&self, val: &tacky::Val) -> assembly::Operand {
+//         match val {
+//             tacky::Val::Constant(i) => assembly::Operand::Imm(*i),
+//             tacky::Val::Var(name) => assembly::Operand::Pseudo(name.clone()),
+//         }
+//     }
 
-    // =================================================================
-    // PASS 2: Replace Pseudoregisters with Stack Slots
-    // =================================================================
+//     // =================================================================
+//     // PASS 2: Replace Pseudoregisters with Stack Slots
+//     // =================================================================
 
-    fn replace_pseudo_with_stack_pass2(
-        &self,
-        asm_func: &mut assembly::Function,
-    ) -> Result<u32, String> {
-        let mut var_map: HashMap<String, i32> = HashMap::new();
-        let mut current_offset = 0;
+//     fn replace_pseudo_with_stack_pass2(
+//         &self,
+//         asm_func: &mut assembly::Function,
+//     ) -> Result<u32, String> {
+//         let mut var_map: HashMap<String, i32> = HashMap::new();
+//         let mut current_offset = 0;
 
-        for inst in &mut asm_func.instructions {
-            match inst {
-                assembly::Instruction::Mov { src, dst } => {
-                    self.assign_stack_offset(src, &mut var_map, &mut current_offset);
-                    self.assign_stack_offset(dst, &mut var_map, &mut current_offset);
-                }
-                assembly::Instruction::Unary { operand, .. } => {
-                    self.assign_stack_offset(operand, &mut var_map, &mut current_offset);
-                }
-                assembly::Instruction::Binary { src, dst, .. } => {
-                    self.assign_stack_offset(src, &mut var_map, &mut current_offset);
-                    self.assign_stack_offset(dst, &mut var_map, &mut current_offset);
-                }
-                assembly::Instruction::Idiv(operand) => {
-                    self.assign_stack_offset(operand, &mut var_map, &mut current_offset);
-                }
-                assembly::Instruction::Cmp { src1, src2 } => {
-                    self.assign_stack_offset(src1, &mut var_map, &mut current_offset);
-                    self.assign_stack_offset(src2, &mut var_map, &mut current_offset);
-                }
-                assembly::Instruction::SetCC(_, operand) => {
-                    self.assign_stack_offset(operand, &mut var_map, &mut current_offset);
-                }
-                _ => {} // Ret, Cdq, AllocateStack 不包含需要替换的操作数
-            }
-        }
-        Ok(current_offset.abs() as u32)
-    }
+//         for inst in &mut asm_func.instructions {
+//             match inst {
+//                 assembly::Instruction::Mov { src, dst } => {
+//                     self.assign_stack_offset(src, &mut var_map, &mut current_offset);
+//                     self.assign_stack_offset(dst, &mut var_map, &mut current_offset);
+//                 }
+//                 assembly::Instruction::Unary { operand, .. } => {
+//                     self.assign_stack_offset(operand, &mut var_map, &mut current_offset);
+//                 }
+//                 assembly::Instruction::Binary { src, dst, .. } => {
+//                     self.assign_stack_offset(src, &mut var_map, &mut current_offset);
+//                     self.assign_stack_offset(dst, &mut var_map, &mut current_offset);
+//                 }
+//                 assembly::Instruction::Idiv(operand) => {
+//                     self.assign_stack_offset(operand, &mut var_map, &mut current_offset);
+//                 }
+//                 assembly::Instruction::Cmp { src1, src2 } => {
+//                     self.assign_stack_offset(src1, &mut var_map, &mut current_offset);
+//                     self.assign_stack_offset(src2, &mut var_map, &mut current_offset);
+//                 }
+//                 assembly::Instruction::SetCC(_, operand) => {
+//                     self.assign_stack_offset(operand, &mut var_map, &mut current_offset);
+//                 }
+//                 _ => {} // Ret, Cdq, AllocateStack 不包含需要替换的操作数
+//             }
+//         }
+//         Ok(current_offset.abs() as u32)
+//     }
 
-    /// 辅助函数：如果操作数是 Pseudo，就给它分配一个栈偏移量。
-    fn assign_stack_offset(
-        &self,
-        op: &mut assembly::Operand,
-        var_map: &mut HashMap<String, i32>,
-        current_offset: &mut i32,
-    ) {
-        if let assembly::Operand::Pseudo(name) = op {
-            let offset = *var_map.entry(name.clone()).or_insert_with(|| {
-                *current_offset -= 4; // 每个变量占 4 字节
-                *current_offset
-            });
-            *op = assembly::Operand::Stack(offset);
-        }
-    }
+//     /// 辅助函数：如果操作数是 Pseudo，就给它分配一个栈偏移量。
+//     fn assign_stack_offset(
+//         &self,
+//         op: &mut assembly::Operand,
+//         var_map: &mut HashMap<String, i32>,
+//         current_offset: &mut i32,
+//     ) {
+//         if let assembly::Operand::Pseudo(name) = op {
+//             let offset = *var_map.entry(name.clone()).or_insert_with(|| {
+//                 *current_offset -= 4; // 每个变量占 4 字节
+//                 *current_offset
+//             });
+//             *op = assembly::Operand::Stack(offset);
+//         }
+//     }
 
-    // =================================================================
-    // PASS 3: Fix Up Instructions
-    // =================================================================
+//     // =================================================================
+//     // PASS 3: Fix Up Instructions
+//     // =================================================================
 
-    fn fixup_instructions_pass3(&self, asm_func: &mut assembly::Function, stack_bytes: u32) {
-        let mut new_instructions = Vec::new();
+//     fn fixup_instructions_pass3(&self, asm_func: &mut assembly::Function, stack_bytes: u32) {
+//         let mut new_instructions = Vec::new();
 
-        // 1. 添加 AllocateStack 指令
-        if stack_bytes > 0 {
-            // 确保栈分配是 16 字节对齐的（System V ABI 要求）
-            let aligned_bytes = (stack_bytes + 15) & !15;
-            new_instructions.push(assembly::Instruction::AllocateStack {
-                bytes: aligned_bytes,
-            });
-        }
+//         // 1. 添加 AllocateStack 指令
+//         if stack_bytes > 0 {
+//             // 确保栈分配是 16 字节对齐的（System V ABI 要求）
+//             let aligned_bytes = (stack_bytes + 15) & !15;
+//             new_instructions.push(assembly::Instruction::AllocateStack {
+//                 bytes: aligned_bytes,
+//             });
+//         }
 
-        // 2. 遍历并修复 mov mem, mem
-        // 遍历并修复所有可能的非法指令
-        for inst in &asm_func.instructions {
-            // 使用一个大的 match 语句来处理所有情况，比多个 if let 更清晰
-            match inst {
-                // 修复 mov mem, mem
-                assembly::Instruction::Mov {
-                    src: assembly::Operand::Stack(src_offset),
-                    dst: assembly::Operand::Stack(dst_offset),
-                } => {
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Stack(*src_offset),
-                        dst: assembly::Operand::Reg(assembly::Register::R10),
-                    });
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Reg(assembly::Register::R10),
-                        dst: assembly::Operand::Stack(*dst_offset),
-                    });
-                }
+//         // 2. 遍历并修复 mov mem, mem
+//         // 遍历并修复所有可能的非法指令
+//         for inst in &asm_func.instructions {
+//             // 使用一个大的 match 语句来处理所有情况，比多个 if let 更清晰
+//             match inst {
+//                 // 修复 mov mem, mem
+//                 assembly::Instruction::Mov {
+//                     src: assembly::Operand::Stack(src_offset),
+//                     dst: assembly::Operand::Stack(dst_offset),
+//                 } => {
+//                     new_instructions.push(assembly::Instruction::Mov {
+//                         src: assembly::Operand::Stack(*src_offset),
+//                         dst: assembly::Operand::Reg(assembly::Register::R10),
+//                     });
+//                     new_instructions.push(assembly::Instruction::Mov {
+//                         src: assembly::Operand::Reg(assembly::Register::R10),
+//                         dst: assembly::Operand::Stack(*dst_offset),
+//                     });
+//                 }
 
-                // --- 修复 add/sub mem, mem ---
-                assembly::Instruction::Binary {
-                    op: op @ (assembly::BinaryOperator::Add | assembly::BinaryOperator::Subtract),
-                    src: assembly::Operand::Stack(src_offset),
-                    dst: assembly::Operand::Stack(dst_offset),
-                } => {
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Stack(*src_offset),
-                        dst: assembly::Operand::Reg(assembly::Register::R10),
-                    });
-                    new_instructions.push(assembly::Instruction::Binary {
-                        op: *op,
-                        src: assembly::Operand::Reg(assembly::Register::R10),
-                        dst: assembly::Operand::Stack(*dst_offset),
-                    });
-                }
+//                 // --- 修复 add/sub mem, mem ---
+//                 assembly::Instruction::Binary {
+//                     op: op @ (assembly::BinaryOperator::Add | assembly::BinaryOperator::Subtract),
+//                     src: assembly::Operand::Stack(src_offset),
+//                     dst: assembly::Operand::Stack(dst_offset),
+//                 } => {
+//                     new_instructions.push(assembly::Instruction::Mov {
+//                         src: assembly::Operand::Stack(*src_offset),
+//                         dst: assembly::Operand::Reg(assembly::Register::R10),
+//                     });
+//                     new_instructions.push(assembly::Instruction::Binary {
+//                         op: *op,
+//                         src: assembly::Operand::Reg(assembly::Register::R10),
+//                         dst: assembly::Operand::Stack(*dst_offset),
+//                     });
+//                 }
 
-                // --- 【修复 imul ?, mem ---
-                assembly::Instruction::Binary {
-                    op: assembly::BinaryOperator::Multiply,
-                    src,
-                    dst: assembly::Operand::Stack(dst_offset),
-                } => {
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Stack(*dst_offset),
-                        dst: assembly::Operand::Reg(assembly::Register::R11),
-                    });
-                    new_instructions.push(assembly::Instruction::Binary {
-                        op: assembly::BinaryOperator::Multiply,
-                        src: src.clone(),
-                        dst: assembly::Operand::Reg(assembly::Register::R11),
-                    });
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Reg(assembly::Register::R11),
-                        dst: assembly::Operand::Stack(*dst_offset),
-                    });
-                }
+//                 // --- 【修复 imul ?, mem ---
+//                 assembly::Instruction::Binary {
+//                     op: assembly::BinaryOperator::Multiply,
+//                     src,
+//                     dst: assembly::Operand::Stack(dst_offset),
+//                 } => {
+//                     new_instructions.push(assembly::Instruction::Mov {
+//                         src: assembly::Operand::Stack(*dst_offset),
+//                         dst: assembly::Operand::Reg(assembly::Register::R11),
+//                     });
+//                     new_instructions.push(assembly::Instruction::Binary {
+//                         op: assembly::BinaryOperator::Multiply,
+//                         src: src.clone(),
+//                         dst: assembly::Operand::Reg(assembly::Register::R11),
+//                     });
+//                     new_instructions.push(assembly::Instruction::Mov {
+//                         src: assembly::Operand::Reg(assembly::Register::R11),
+//                         dst: assembly::Operand::Stack(*dst_offset),
+//                     });
+//                 }
 
-                // --- 修复 idiv imm ---
-                assembly::Instruction::Idiv(assembly::Operand::Imm(val)) => {
-                    new_instructions.push(assembly::Instruction::Mov {
-                        src: assembly::Operand::Imm(*val),
-                        dst: assembly::Operand::Reg(assembly::Register::R10),
-                    });
-                    new_instructions.push(assembly::Instruction::Idiv(assembly::Operand::Reg(
-                        assembly::Register::R10,
-                    )));
-                }
-                assembly::Instruction::Cmp { src1, src2 } => {
-                    let mut s1 = src1.clone();
-                    let mut s2 = src2.clone();
+//                 // --- 修复 idiv imm ---
+//                 assembly::Instruction::Idiv(assembly::Operand::Imm(val)) => {
+//                     new_instructions.push(assembly::Instruction::Mov {
+//                         src: assembly::Operand::Imm(*val),
+//                         dst: assembly::Operand::Reg(assembly::Register::R10),
+//                     });
+//                     new_instructions.push(assembly::Instruction::Idiv(assembly::Operand::Reg(
+//                         assembly::Register::R10,
+//                     )));
+//                 }
+//                 assembly::Instruction::Cmp { src1, src2 } => {
+//                     let mut s1 = src1.clone();
+//                     let mut s2 = src2.clone();
 
-                    // 规则 1: 如果两个操作数都是内存，把 src1 移到 R10
-                    if let (assembly::Operand::Stack(o1), assembly::Operand::Stack(_)) = (&s1, &s2)
-                    {
-                        new_instructions.push(assembly::Instruction::Mov {
-                            src: assembly::Operand::Stack(*o1),
-                            dst: assembly::Operand::Reg(assembly::Register::R10),
-                        });
-                        s1 = assembly::Operand::Reg(assembly::Register::R10);
-                    }
+//                     // 规则 1: 如果两个操作数都是内存，把 src1 移到 R10
+//                     if let (assembly::Operand::Stack(o1), assembly::Operand::Stack(_)) = (&s1, &s2)
+//                     {
+//                         new_instructions.push(assembly::Instruction::Mov {
+//                             src: assembly::Operand::Stack(*o1),
+//                             dst: assembly::Operand::Reg(assembly::Register::R10),
+//                         });
+//                         s1 = assembly::Operand::Reg(assembly::Register::R10);
+//                     }
 
-                    // 规则 2: 如果第二个操作数是立即数，把它移到 R11
-                    if let assembly::Operand::Imm(val) = &s2 {
-                        new_instructions.push(assembly::Instruction::Mov {
-                            src: assembly::Operand::Imm(*val),
-                            dst: assembly::Operand::Reg(assembly::Register::R11),
-                        });
-                        s2 = assembly::Operand::Reg(assembly::Register::R11);
-                    }
+//                     // 规则 2: 如果第二个操作数是立即数，把它移到 R11
+//                     if let assembly::Operand::Imm(val) = &s2 {
+//                         new_instructions.push(assembly::Instruction::Mov {
+//                             src: assembly::Operand::Imm(*val),
+//                             dst: assembly::Operand::Reg(assembly::Register::R11),
+//                         });
+//                         s2 = assembly::Operand::Reg(assembly::Register::R11);
+//                     }
 
-                    // 添加最终修复好的 cmp 指令
-                    new_instructions.push(assembly::Instruction::Cmp { src1: s1, src2: s2 });
-                }
-                // 所有其他合法指令，直接复制
-                _ => {
-                    new_instructions.push(inst.clone());
-                }
-            }
-        }
+//                     // 添加最终修复好的 cmp 指令
+//                     new_instructions.push(assembly::Instruction::Cmp { src1: s1, src2: s2 });
+//                 }
+//                 // 所有其他合法指令，直接复制
+//                 _ => {
+//                     new_instructions.push(inst.clone());
+//                 }
+//             }
+//         }
 
-        // 用修复后的指令列表替换原来的
-        asm_func.instructions = new_instructions;
-    }
-}
+//         // 用修复后的指令列表替换原来的
+//         asm_func.instructions = new_instructions;
+//     }
+// }

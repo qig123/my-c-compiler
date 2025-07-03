@@ -65,17 +65,23 @@ pub enum Instruction {
         target: String,
     },
     Label(String),
+    FunCall {
+        name: String,
+        args: Vec<Val>,
+        dst: Val,
+    },
 }
 
 /// TACKY 中的一个函数定义。
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<String>,
     pub body: Vec<Instruction>,
 }
 
-/// TACKY 程序的根节点。
+/// TACKY 程序的根节点。s
 #[derive(Debug)]
 pub struct Program {
-    pub function: Function,
+    pub functions: Vec<Function>,
 }
