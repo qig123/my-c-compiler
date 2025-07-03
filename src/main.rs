@@ -1,8 +1,8 @@
 // src/main.rs
 
 use clap::Parser as ClapParser;
+use my_c_compiler::backend::asm_gen::AsmGenerator;
 use my_c_compiler::backend::tacky_gen::TackyGenerator;
-// use my_c_compiler::backend::{asm_gen::AsmGenerator, emitter, tacky_gen::TackyGenerator};
 use my_c_compiler::common::UniqueIdGenerator;
 use my_c_compiler::lexer::{self, Token};
 use my_c_compiler::parser as CParser;
@@ -143,11 +143,19 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // println!("\n6. Generating Assembly AST from TACKY IR...");
-    // let mut asm_generator = AsmGenerator::new();
-    // let asm_ast = asm_generator.generate_assembly(tacky_ir)?;
-    // println!("   ✓ Assembly AST generation successful.");
-    // if cli.codegen { /* ... */ }
+    println!("\n6. Generating Assembly AST from TACKY IR...");
+    let mut asm_generator = AsmGenerator::new();
+    let asm_ast = asm_generator.generate_assembly(tacky_ir)?;
+    println!("   ✓ Assembly AST generation successful.");
+    if cli.codegen {
+        println!(
+            "--- Generated Assembly AST ---\n{:#?}\n--------------------------",
+            asm_ast
+        );
+        println!("\nHalting as requested by --codegen.");
+        fs::remove_file(&preprocessed_path)?;
+        return Ok(());
+    }
 
     // println!("\n7. Emitting assembly code from Assembly AST...");
     // let assembly_code = emitter::emit_assembly(asm_ast)?;

@@ -3,7 +3,12 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Register {
     AX,
+    CX,
     DX,
+    DI,
+    SI,
+    R8,
+    R9,
     R10,
     R11,
 }
@@ -72,6 +77,9 @@ pub enum Instruction {
     AllocateStack {
         bytes: u32,
     }, // 这个从PASS 3移动到这里更合适
+    DeallocateStack(u32),
+    Push(Operand),
+    Call(String),
 }
 
 #[derive(Debug)]
@@ -82,5 +90,5 @@ pub struct Function {
 
 #[derive(Debug)]
 pub struct Program {
-    pub function: Function,
+    pub functions: Vec<Function>,
 }
