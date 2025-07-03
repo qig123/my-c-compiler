@@ -28,6 +28,7 @@ pub enum TokenType {
     Greater,      // >
     GreaterEqual, // >=
     Assign,       // =
+    Comma,        //,
     KeywordInt,
     KeywordVoid,
     KeywordReturn,
@@ -219,6 +220,10 @@ impl<'a> Lexer<'a> {
             ':' => {
                 self.chars.next();
                 Ok(TokenType::Colon)
+            }
+            ',' => {
+                self.chars.next();
+                Ok(TokenType::Comma)
             }
             '-' => {
                 self.chars.next();
