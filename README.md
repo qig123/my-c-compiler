@@ -14,3 +14,4 @@ cargo run -- --lex tests/input.c
 
  ../writing-a-c-compiler-tests/test_compiler ./target/debug/my_c_compiler --chapter 3 --stage lex
  ../writing-a-c-compiler-tests/test_compiler ./target/debug/my_c_compiler --chapter 4 --stage lex
+ ../writing-a-c-compiler-tests/test_compiler ./target/debug/my_c_compiler --chapter 9 --stage validate

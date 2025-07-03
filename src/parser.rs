@@ -6,14 +6,13 @@ use crate::{
     lexer::{Token, TokenType},
 };
 
-// ... (AST 定义之后) ...
-
 pub struct Parser<'a> {
     tokens: &'a [Token],
     position: usize,
 }
 
 impl<'a> Parser<'a> {
+    /// 创建一个新的 Parser 实例。
     pub fn new(tokens: &'a [Token]) -> Self {
         Parser {
             tokens,
@@ -21,24 +20,482 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // ===================================================================
+    //  1. 公共 API 与顶层解析 (Public API & Top-Level Parsing)
+    // ===================================================================
+    //  语法层级: program -> declaration -> (function | variable)
+    // ===================================================================
+
+    /// 【主入口】解析整个 token 流，生成一个程序（Program）。
+    /// <program> ::= {<declaration>}
     pub fn parse(&mut self) -> Result<Program, String> {
-        let function = self.parse_function()?;
-        if self.position < self.tokens.len() {
-            let token = &self.tokens[self.position];
-            return Err(format!(
-                "Unexpected token {:?} on line {}",
-                token.token_type, token.line
-            ));
+        let mut declarations = Vec::new();
+        // 循环解析顶层声明，直到 token 流结束
+        while self.peek().is_some() {
+            declarations.push(self.parse_declaration()?);
         }
-        Ok(Program { function })
+        Ok(Program { declarations })
     }
 
-    // --- Private Helper Methods ---
+    /// 解析一个声明（函数或变量）。
+    /// <declaration> ::= "int" <identifier> ( "(" ... | "=" ... | ";" )
+    fn parse_declaration(&mut self) -> Result<Declaration, String> {
+        self.expect_token(TokenType::KeywordInt)?;
+        let name = self.expect_identifier()?;
 
+        // 通过预读下一个 token 来区分是变量还是函数
+        if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::OpenParen)
+        {
+            // 下一个是 '(', 这是一个函数声明
+            self.parse_function_declaration(name)
+        } else {
+            // 否则，这是一个变量声明
+            self.parse_variable_declaration(name)
+        }
+    }
+
+    /// 解析一个函数声明 (已经消费了 "int" 和 identifier)。
+    /// <function-declaration> ::= "(" <param-list> ")" ( <block> | ";" )
+    fn parse_function_declaration(&mut self, name: String) -> Result<Declaration, String> {
+        self.expect_token(TokenType::OpenParen)?;
+        let params = self.parse_param_list()?;
+        self.expect_token(TokenType::CloseParen)?;
+
+        // 函数声明后面可以是函数体 '{...}' 或一个分号 ';' (函数原型)
+        let body = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::OpenBrace)
+        {
+            Some(self.parse_block()?)
+        } else {
+            self.expect_token(TokenType::Semicolon)?;
+            None
+        };
+
+        Ok(Declaration::Function { name, params, body })
+    }
+
+    /// 解析一个变量声明 (已经消费了 "int" 和 identifier)。
+    /// <variable-declaration> ::= [ "=" <expression> ] ";"
+    fn parse_variable_declaration(&mut self, name: String) -> Result<Declaration, String> {
+        let init = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::Assign)
+        {
+            self.consume(); // 消费 '='
+            Some(self.parse_expression(0)?)
+        } else {
+            None
+        };
+        self.expect_token(TokenType::Semicolon)?;
+        Ok(Declaration::Variable { name, init })
+    }
+
+    // ===================================================================
+    //  2. 语句与代码块解析 (Statement & Block Parsing)
+    // ===================================================================
+    //  语法层级: block -> block_item -> statement -> (if, for, while...)
+    // ===================================================================
+
+    /// 解析一个由花括号包裹的代码块。
+    /// <block> ::= "{" {<block-item>} "}"
+    fn parse_block(&mut self) -> Result<Block, String> {
+        self.expect_token(TokenType::OpenBrace)?;
+        let mut items = Vec::new();
+        while self
+            .peek()
+            .map_or(false, |t| t.token_type != TokenType::CloseBrace)
+        {
+            items.push(self.parse_block_item()?);
+        }
+        self.expect_token(TokenType::CloseBrace)?;
+        Ok(Block { blocks: items })
+    }
+
+    /// 解析代码块中的一项（可以是声明或语句）。
+    /// <block-item> ::= <statement> | <declaration>
+    fn parse_block_item(&mut self) -> Result<BlockItem, String> {
+        if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::KeywordInt)
+        {
+            // 'int' 关键字开头，必定是声明
+            self.parse_declaration().map(BlockItem::D)
+        } else {
+            // 否则，是语句
+            self.parse_statement().map(BlockItem::S)
+        }
+    }
+
+    /// 解析一个语句。
+    /// <statement> ::= <if-stmt> | <for-stmt> | <while-stmt> | <do-while-stmt>
+    ///               | <return-stmt> | <break-stmt> | <continue-stmt>
+    ///               | <block> | [<expression>] ";"
+    fn parse_statement(&mut self) -> Result<Statement, String> {
+        if let Some(token) = self.peek() {
+            match token.token_type {
+                TokenType::KeywordIf => self.parse_if_statement(),
+                TokenType::KeywordFor => self.parse_for_statement(),
+                TokenType::KeywordWhile => self.parse_while_statement(),
+                TokenType::KeywordDo => self.parse_do_while_statement(),
+                TokenType::KeywordReturn => {
+                    self.consume(); // 消费 "return"
+                    let exp = self.parse_expression(0)?;
+                    self.expect_token(TokenType::Semicolon)?;
+                    Ok(Statement::Return(exp))
+                }
+                TokenType::KeywordBreak => {
+                    self.consume(); // 消费 "break"
+                    self.expect_token(TokenType::Semicolon)?;
+                    Ok(Statement::Break)
+                }
+                TokenType::KeywordContinue => {
+                    self.consume(); // 消费 "continue"
+                    self.expect_token(TokenType::Semicolon)?;
+                    Ok(Statement::Continue)
+                }
+                TokenType::OpenBrace => self.parse_block().map(Statement::Compound),
+                TokenType::Semicolon => {
+                    self.consume(); // 消费 ";"
+                    Ok(Statement::Empty)
+                }
+                _ => {
+                    // 表达式语句
+                    let exp = self.parse_expression(0)?;
+                    self.expect_token(TokenType::Semicolon)?;
+                    Ok(Statement::Expression(exp))
+                }
+            }
+        } else {
+            Err("Expected a statement, but found end of input.".to_string())
+        }
+    }
+
+    /// 解析 if 语句。
+    /// <if-stmt> ::= "if" "(" <expression> ")" <statement> [ "else" <statement> ]
+    fn parse_if_statement(&mut self) -> Result<Statement, String> {
+        self.expect_token(TokenType::KeywordIf)?;
+        self.expect_token(TokenType::OpenParen)?;
+        let condition = self.parse_expression(0)?;
+        self.expect_token(TokenType::CloseParen)?;
+        let then_stat = Box::new(self.parse_statement()?);
+
+        let else_stat = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::KeywordElse)
+        {
+            self.consume(); // 消费 "else"
+            Some(Box::new(self.parse_statement()?))
+        } else {
+            None
+        };
+
+        Ok(Statement::If {
+            condition,
+            then_stat,
+            else_stat,
+        })
+    }
+
+    /// 解析 for 语句。
+    /// <for-stmt> ::= "for" "(" ( <declaration> | [<expression>] ";" ) [<expression>] ";" [<expression>] ")" <statement>
+    fn parse_for_statement(&mut self) -> Result<Statement, String> {
+        self.expect_token(TokenType::KeywordFor)?;
+        self.expect_token(TokenType::OpenParen)?;
+
+        // 解析初始化部分
+        let init = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::KeywordInt)
+        {
+            // for (int i = 0; ... )
+            let decl = self.parse_declaration()?;
+            // for 循环的初始化器中不允许函数声明
+            if let Declaration::Function { .. } = &decl {
+                return Err(
+                    "Function declarations are not permitted in for loop initializers.".to_string(),
+                );
+            }
+            Some(Box::new(BlockItem::D(decl)))
+        } else if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::Semicolon)
+        {
+            // for ( ; ... )
+            self.consume(); // 消费 ";"
+            None
+        } else {
+            // for (i = 0; ... )
+            let expr = self.parse_expression(0)?;
+            self.expect_token(TokenType::Semicolon)?;
+            Some(Box::new(BlockItem::S(Statement::Expression(expr))))
+        };
+
+        // 解析条件部分
+        let condition = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::Semicolon)
+        {
+            None // for (...; ; ...)
+        } else {
+            Some(self.parse_expression(0)?)
+        };
+        self.expect_token(TokenType::Semicolon)?;
+
+        // 解析迭代表达式部分
+        let post = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::CloseParen)
+        {
+            None // for (...; ...; )
+        } else {
+            Some(self.parse_expression(0)?)
+        };
+        self.expect_token(TokenType::CloseParen)?;
+
+        // 解析循环体
+        let body = Box::new(self.parse_statement()?);
+
+        Ok(Statement::For {
+            init,
+            condition,
+            post,
+            body,
+        })
+    }
+
+    /// 解析 while 语句。
+    /// <while-stmt> ::= "while" "(" <expression> ")" <statement>
+    fn parse_while_statement(&mut self) -> Result<Statement, String> {
+        self.expect_token(TokenType::KeywordWhile)?;
+        self.expect_token(TokenType::OpenParen)?;
+        let condition = self.parse_expression(0)?;
+        self.expect_token(TokenType::CloseParen)?;
+        let body = Box::new(self.parse_statement()?);
+        Ok(Statement::While { condition, body })
+    }
+
+    /// 解析 do-while 语句。
+    /// <do-while-stmt> ::= "do" <statement> "while" "(" <expression> ")" ";"
+    fn parse_do_while_statement(&mut self) -> Result<Statement, String> {
+        self.expect_token(TokenType::KeywordDo)?;
+        let body = Box::new(self.parse_statement()?);
+        self.expect_token(TokenType::KeywordWhile)?;
+        self.expect_token(TokenType::OpenParen)?;
+        let condition = self.parse_expression(0)?;
+        self.expect_token(TokenType::CloseParen)?;
+        self.expect_token(TokenType::Semicolon)?; // do-while 结尾必须有分号
+        Ok(Statement::DoWhile { condition, body })
+    }
+
+    // ===================================================================
+    //  3. 表达式解析 (Expression Parsing via Precedence Climbing)
+    // ===================================================================
+    //  语法层级: expression -> factor
+    //  这是解析器的核心，使用优先级爬升法来处理不同优先级的二元运算符。
+    // ===================================================================
+
+    /// 使用“优先级爬升法”解析表达式。
+    /// <expression> ::= <factor> { <binop> <expression> } | <assignment> | <conditional>
+    fn parse_expression(&mut self, min_precedence: u8) -> Result<Expression, String> {
+        let mut left = self.parse_factor()?;
+
+        while let Some(next_token) = self.peek().cloned() {
+            let precedence = Self::get_precedence(&next_token.token_type);
+
+            // 如果下一个 token 不是运算符，或者其优先级低于当前最低优先级，则停止
+            if precedence == 0 || precedence < min_precedence {
+                break;
+            }
+
+            self.consume(); // 消费该运算符
+
+            // 处理特殊的三元运算符 ?: (右结合)
+            if next_token.token_type == TokenType::QuestionMark {
+                let then_branch = self.parse_expression(0)?; // then 分支优先级重置
+                self.expect_token(TokenType::Colon)?;
+                // else 分支的右结合处理，递归时传入当前运算符的优先级
+                let else_branch = self.parse_expression(precedence)?;
+                left = Expression::Conditional {
+                    condition: Box::new(left),
+                    left: Box::new(then_branch),
+                    right: Box::new(else_branch),
+                };
+                continue; // 继续循环，处理可能的更高优先级运算符
+            }
+
+            // 处理赋值运算符 = (右结合)
+            let right = if next_token.token_type == TokenType::Assign {
+                // 对于右结合运算符，递归调用的 min_precedence 与当前运算符的 precedence 相同
+                self.parse_expression(precedence)?
+            } else {
+                // 对于左结合运算符，递归调用的 min_precedence 是当前 precedence + 1
+                self.parse_expression(precedence + 1)?
+            };
+
+            // 构建 AST 节点
+            if next_token.token_type == TokenType::Assign {
+                left = Expression::Assign {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                };
+            } else {
+                let op = self.token_to_binary_operator(&next_token.token_type)?;
+                left = Expression::Binary {
+                    operator: op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                };
+            }
+        }
+
+        Ok(left)
+    }
+
+    // ===================================================================
+    //  4. 原子项与辅助解析 (Factors & Parsing Helpers)
+    // ===================================================================
+    //  语法层级: factor -> <int> | <identifier> | <func-call> | <unary-op> | ( <exp> )
+    // ===================================================================
+
+    /// 解析一个“因子”，即表达式中的最小单元。
+    /// <factor> ::= <int> | <identifier> [ "(" <arg-list> ")" ] | <unop> <factor> | "(" <expression> ")"
+    fn parse_factor(&mut self) -> Result<Expression, String> {
+        let next_token = self
+            .peek()
+            .cloned()
+            .ok_or_else(|| "Unexpected end of input, expected a factor.".to_string())?;
+
+        match &next_token.token_type {
+            TokenType::IntegerConstant(val) => {
+                self.consume();
+                Ok(Expression::Constant(*val))
+            }
+            TokenType::Identifier(name) => {
+                // 需要预读一个 token 来判断是变量还是函数调用
+                if self
+                    .tokens
+                    .get(self.position + 1)
+                    .map_or(false, |t| t.token_type == TokenType::OpenParen)
+                {
+                    // 是函数调用
+                    self.consume(); // 消费 identifier
+                    self.consume(); // 消费 '('
+                    let args = self.parse_argument_list()?;
+                    self.expect_token(TokenType::CloseParen)?;
+                    Ok(Expression::FunctionCall {
+                        name: name.clone(),
+                        args,
+                    })
+                } else {
+                    // 是变量
+                    self.consume();
+                    Ok(Expression::Var(name.clone()))
+                }
+            }
+            // 一元运算符
+            TokenType::Minus | TokenType::Tilde | TokenType::Not => {
+                self.consume();
+                let operator = self.token_to_unary_operator(&next_token.token_type)?;
+                // 一元运算符有最高优先级，因此直接递归解析其后的因子
+                let expression = self.parse_factor()?;
+                Ok(Expression::Unary {
+                    operator,
+                    expression: Box::new(expression),
+                })
+            }
+            // 括号表达式
+            TokenType::OpenParen => {
+                self.consume(); // 消费 '('
+                let inner_expression = self.parse_expression(0)?; // 括号内表达式优先级重置为0
+                self.expect_token(TokenType::CloseParen)?;
+                Ok(inner_expression)
+            }
+            _ => Err(format!(
+                "Unexpected token {:?}, expected a factor.",
+                next_token.token_type
+            )),
+        }
+    }
+
+    /// 解析函数参数列表 (声明时使用)。
+    /// <param-list> ::= "void" | [ "int" <identifier> { "," "int" <identifier> } ]
+    fn parse_param_list(&mut self) -> Result<Vec<String>, String> {
+        if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::KeywordVoid)
+        {
+            self.consume(); // 消费 "void"
+            if self
+                .peek()
+                .map_or(true, |t| t.token_type != TokenType::CloseParen)
+            {
+                return Err("Expected ')' after 'void' in parameter list.".to_string());
+            }
+            return Ok(Vec::new());
+        }
+
+        if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::CloseParen)
+        {
+            return Ok(Vec::new()); // 空参数列表
+        }
+
+        let mut params = Vec::new();
+        // 第一个参数
+        self.expect_token(TokenType::KeywordInt)?;
+        params.push(self.expect_identifier()?);
+        // 后续参数
+        while self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::Comma)
+        {
+            self.consume(); // 消费 ','
+            self.expect_token(TokenType::KeywordInt)?;
+            params.push(self.expect_identifier()?);
+        }
+
+        Ok(params)
+    }
+
+    /// 解析函数实参列表 (调用时使用)。
+    /// <argument-list> ::= [ <expression> { "," <expression> } ]
+    fn parse_argument_list(&mut self) -> Result<Vec<Expression>, String> {
+        if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::CloseParen)
+        {
+            return Ok(Vec::new()); // 空参数列表
+        }
+
+        let mut args = Vec::new();
+        // 第一个参数
+        args.push(self.parse_expression(0)?);
+        // 后续参数
+        while self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::Comma)
+        {
+            self.consume(); // 消费 ','
+            args.push(self.parse_expression(0)?);
+        }
+
+        Ok(args)
+    }
+
+    // ===================================================================
+    //  5. 底层工具函数 (Low-Level Utilities)
+    // ===================================================================
+
+    /// 查看当前位置的 token，但不消费它。
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.position)
     }
 
+    /// 消费并返回当前位置的 token，然后将位置向前移动一位。
     fn consume(&mut self) -> Option<&Token> {
         let token = self.tokens.get(self.position);
         if token.is_some() {
@@ -47,6 +504,7 @@ impl<'a> Parser<'a> {
         token
     }
 
+    /// 期望当前 token 是指定类型，如果是则消费它并返回，否则返回错误。
     fn expect_token(&mut self, expected_type: TokenType) -> Result<&Token, String> {
         match self.peek() {
             Some(token) if token.token_type == expected_type => Ok(self.consume().unwrap()),
@@ -61,6 +519,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// 期望当前 token 是一个标识符，如果是则消费它并返回其名称，否则返回错误。
     fn expect_identifier(&mut self) -> Result<String, String> {
         match self.peek().map(|t| &t.token_type) {
             Some(TokenType::Identifier(name)) => {
@@ -68,20 +527,16 @@ impl<'a> Parser<'a> {
                 self.consume();
                 Ok(name_clone)
             }
-            Some(other_token) => Err(format!(
-                "Expected an identifier, but found {:?}",
-                other_token
-            )),
+            Some(other) => Err(format!("Expected an identifier, but found {:?}", other)),
             None => Err("Expected an identifier, but found end of input.".to_string()),
         }
     }
 
-    // --- 【新增】获取二元运算符的优先级 ---
-    // 我们将把这个逻辑移到 parse_expression 内部，但保留这个辅助函数以供参考
+    /// 获取一个二元运算符的优先级。
     fn get_precedence(token_type: &TokenType) -> u8 {
         match token_type {
-            TokenType::Assign => 1,
-            TokenType::QuestionMark => 3,
+            TokenType::Assign => 1,       // 右结合
+            TokenType::QuestionMark => 3, // 右结合 (三元)
             TokenType::Or => 5,
             TokenType::And => 10,
             TokenType::Equal | TokenType::NotEqual => 30,
@@ -91,307 +546,11 @@ impl<'a> Parser<'a> {
             | TokenType::GreaterEqual => 35,
             TokenType::Plus | TokenType::Minus => 45,
             TokenType::Asterisk | TokenType::Slash | TokenType::Percent => 50,
-            _ => 0, // 不是二元运算符
+            _ => 0, // 0 表示不是二元运算符或不参与优先级比较
         }
     }
 
-    // --- Recursive Descent Parsing Methods ---
-
-    /// 【修改】解析一个函数定义。
-    /// <function> ::= "int" <identifier> "(" "void" ")" "{" {<block-item>} "}"
-    fn parse_function(&mut self) -> Result<Function, String> {
-        self.expect_token(TokenType::KeywordInt)?;
-        let name = self.expect_identifier()?;
-        self.expect_token(TokenType::OpenParen)?;
-        self.expect_token(TokenType::KeywordVoid)?;
-        self.expect_token(TokenType::CloseParen)?;
-
-        // 【修改】直接调用新的辅助函数
-        let body = self.parse_block()?;
-
-        Ok(Function { name, body })
-    }
-    /// 【新增】解析一个由花括号包裹的块。
-    /// <block> ::= "{" {<block-item>} "}"
-    fn parse_block(&mut self) -> Result<Block, String> {
-        self.expect_token(TokenType::OpenBrace)?; // 期望并消费 '{'
-
-        let mut items = Vec::new();
-        // 循环解析 block-item，直到遇到 '}'
-        while self
-            .peek()
-            .map_or(false, |t| t.token_type != TokenType::CloseBrace)
-        {
-            items.push(self.parse_block_item()?);
-        }
-
-        self.expect_token(TokenType::CloseBrace)?; // 期望并消费 '}'
-
-        Ok(Block { blocks: items })
-    }
-
-    /// 【新增】解析一个块项目。
-    /// <block-item> ::= <statement> | <declaration>
-    fn parse_block_item(&mut self) -> Result<BlockItem, String> {
-        // 通过预读第一个 token 来判断是声明还是语句
-        if let Some(token) = self.peek() {
-            if token.token_type == TokenType::KeywordInt {
-                // 'int' 关键字开头，是声明
-                let declaration = self.parse_declaration()?;
-                Ok(BlockItem::D(declaration))
-            } else {
-                // 否则，是语句
-                let statement = self.parse_statement()?;
-                Ok(BlockItem::S(statement))
-            }
-        } else {
-            Err("Expected a statement or declaration, but found end of input.".to_string())
-        }
-    }
-
-    /// 【新增】解析一个声明。
-    /// <declaration> ::= "int" <identifier> ["=" <exp>] ";"
-    fn parse_declaration(&mut self) -> Result<Declaration, String> {
-        self.expect_token(TokenType::KeywordInt)?;
-        let name = self.expect_identifier()?;
-
-        let init;
-        // 检查可选的初始化器
-        if self
-            .peek()
-            .map_or(false, |t| t.token_type == TokenType::Assign)
-        {
-            self.consume(); // 消费 '='
-            init = Some(self.parse_expression(0)?);
-        } else {
-            init = None;
-        }
-
-        self.expect_token(TokenType::Semicolon)?;
-        Ok(Declaration { name, init })
-    }
-
-    /// 【修改】解析一个语句。
-    /// <statement> ::= "return" <exp> ";" | [<exp>] ";" |"if" "(" <exp> ")" <statement> ["else" <statement>] || <block>
-    fn parse_statement(&mut self) -> Result<Statement, String> {
-        if let Some(token) = self.peek() {
-            match token.token_type {
-                TokenType::KeywordReturn => {
-                    self.consume(); // 消费 "return"
-                    let exp = self.parse_expression(0)?;
-                    self.expect_token(TokenType::Semicolon)?;
-                    Ok(Statement::Return(exp))
-                }
-                // 【修改】明确处理空语句的情况
-                TokenType::Semicolon => {
-                    self.consume(); // 消费 ";"
-                    Ok(Statement::Empty) // 返回 Empty 变体
-                }
-                TokenType::KeywordIf => {
-                    self.consume(); //消费if
-                    self.expect_token(TokenType::OpenParen)?;
-                    let c = self.parse_expression(0)?;
-                    self.expect_token(TokenType::CloseParen)?;
-                    let then_s = self.parse_statement()?;
-                    let else_s;
-                    if let Some(token) = self.peek() {
-                        if token.token_type == TokenType::KeywordElse {
-                            self.consume();
-                            else_s = Some(Box::new(self.parse_statement()?));
-                        } else {
-                            else_s = None;
-                        }
-                    } else {
-                        else_s = None;
-                    }
-                    return Ok(Statement::If {
-                        condition: c,
-                        then_stat: Box::new(then_s),
-                        else_stat: else_s,
-                    });
-                }
-                TokenType::OpenBrace => {
-                    let block = self.parse_block()?;
-                    Ok(Statement::Compound(block))
-                }
-                TokenType::KeywordFor => self.parse_for_statement(),
-                TokenType::KeywordWhile => self.parse_while_statement(),
-                TokenType::KeywordDo => self.parse_do_while_statement(),
-                TokenType::KeywordBreak => {
-                    self.consume(); // consume 'break'
-                    self.expect_token(TokenType::Semicolon)?;
-                    Ok(Statement::Break)
-                }
-                TokenType::KeywordContinue => {
-                    self.consume();
-                    self.expect_token(TokenType::Semicolon)?;
-                    Ok(Statement::Continue)
-                }
-                _ => {
-                    // 表达式语句：<exp> ;
-                    let exp = self.parse_expression(0)?;
-                    self.expect_token(TokenType::Semicolon)?;
-                    Ok(Statement::Expression(exp)) // 返回 Expression 变体
-                }
-            }
-        } else {
-            Err("Expected a statement, but found end of input.".to_string())
-        }
-    }
-    // "while" "(" <exp> ")" <statement>
-    fn parse_while_statement(&mut self) -> Result<Statement, String> {
-        self.consume(); // consume 'while'
-        self.expect_token(TokenType::OpenParen)?;
-        let condition = self.parse_expression(0)?;
-        self.expect_token(TokenType::CloseParen)?;
-        let body = self.parse_statement()?;
-        Ok(Statement::While {
-            condition,
-            body: Box::new(body),
-        })
-    }
-
-    // "do" <statement> "while" "(" <exp> ")" ";"
-    fn parse_do_while_statement(&mut self) -> Result<Statement, String> {
-        self.consume(); // consume 'do'
-        let body = self.parse_statement()?;
-        self.expect_token(TokenType::KeywordWhile)?;
-        self.expect_token(TokenType::OpenParen)?;
-        let condition = self.parse_expression(0)?;
-        self.expect_token(TokenType::CloseParen)?;
-
-        // 【修复 Bug 2】消费最后的那个分号！
-        self.expect_token(TokenType::Semicolon)?;
-
-        // 【修复 Bug 1】返回正确的 Statement::DoWhile 节点
-        Ok(Statement::DoWhile {
-            condition,
-            body: Box::new(body),
-        })
-    }
-    // for (<declaration>|<exp>; <exp>; <exp>) <statement>
-
-    fn parse_for_statement(&mut self) -> Result<Statement, String> {
-        self.consume(); // consume 'for'
-        self.expect_token(TokenType::OpenParen)?;
-
-        // 1. 解析初始化部分
-        let init = if self
-            .peek()
-            .map_or(false, |t| t.token_type == TokenType::Semicolon)
-        {
-            None // 空的初始化
-        } else if self
-            .peek()
-            .map_or(false, |t| t.token_type == TokenType::KeywordInt)
-        {
-            // 是一个声明
-            Some(Box::new(self.parse_declaration().map(BlockItem::D)?))
-        } else {
-            // 是一个表达式
-            Some(Box::new(
-                self.parse_expression(0)
-                    .map(Statement::Expression)
-                    .map(BlockItem::S)?,
-            ))
-        };
-
-        // C 语言中，for(exp;) 是合法的，但 for(declaration) 不带分号是非法的。
-        // 如果是表达式，后面必须跟分号。如果是声明，分号已经在 parse_declaration 中消费了。
-        if !matches!(init, Some(ref b) if matches!(**b, BlockItem::D(_))) {
-            self.expect_token(TokenType::Semicolon)?;
-        }
-
-        // 2. 解析条件部分
-        let condition = if self
-            .peek()
-            .map_or(false, |t| t.token_type == TokenType::Semicolon)
-        {
-            None // 空条件
-        } else {
-            Some(self.parse_expression(0)?)
-        };
-        self.expect_token(TokenType::Semicolon)?;
-
-        // 3. 解析循环后表达式
-        let post = if self
-            .peek()
-            .map_or(false, |t| t.token_type == TokenType::CloseParen)
-        {
-            None // 空的 post-expression
-        } else {
-            Some(self.parse_expression(0)?)
-        };
-        self.expect_token(TokenType::CloseParen)?;
-
-        // 4. 解析循环体
-        let body = self.parse_statement()?;
-
-        Ok(Statement::For {
-            init,
-            condition,
-            post,
-            body: Box::new(body),
-        })
-    }
-
-    /// 【核心修改】使用优先级爬升法解析表达式，支持右结合赋值。
-    fn parse_expression(&mut self, min_precedence: u8) -> Result<Expression, String> {
-        let mut left = self.parse_factor()?;
-
-        while let Some(next_token) = self.peek().cloned() {
-            let precedence = Self::get_precedence(&next_token.token_type);
-            if precedence == 0 || precedence < min_precedence {
-                break; // 不是二元运算符或优先级不够
-            }
-
-            // 消费掉这个运算符
-            self.consume();
-
-            // 检查结合性
-            if next_token.token_type == TokenType::Assign {
-                // 右结合
-                // 对于右结合运算符，递归调用的 min_precedence 与当前运算符的 precedence 相同
-                let right = self.parse_expression(precedence)?;
-                left = Expression::Assign {
-                    left: Box::new(left),
-                    right: Box::new(right),
-                };
-            } else if next_token.token_type == TokenType::QuestionMark {
-                //右结合
-                // `left` 已经是我们的 condition 部分
-                // `?` 已经被消费了
-                // 解析 "then" 分支
-                let then_branch = self.parse_expression(0)?;
-                // 期望一个冒号
-                self.expect_token(TokenType::Colon)?;
-
-                // 解析 "else" 分支，使用 '?' 的优先级进行右结合处理
-                let else_branch = self.parse_expression(precedence)?;
-
-                // 组装成 Conditional 节点
-                left = Expression::Conditional {
-                    condition: Box::new(left),
-                    left: Box::new(then_branch),
-                    right: Box::new(else_branch),
-                };
-            } else {
-                // 左结合
-                // 对于左结合运算符，递归调用的 min_precedence 是当前 precedence + 1
-                let op = self.token_to_binary_operator(&next_token.token_type)?;
-                let right = self.parse_expression(precedence + 1)?;
-                left = Expression::Binary {
-                    operator: op,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                };
-            }
-        }
-
-        Ok(left)
-    }
-
-    /// 【新增】辅助函数，将 TokenType 转换为 BinaryOperator
+    /// 将 TokenType 转换为 BinaryOperator。
     fn token_to_binary_operator(&self, token_type: &TokenType) -> Result<BinaryOperator, String> {
         match token_type {
             TokenType::Plus => Ok(BinaryOperator::Add),
@@ -411,58 +570,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// 【修改】解析一个因子。
-    /// <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
-    /// 【修改】解析一个因子。 (更健壮的版本)
-    /// <factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
-    fn parse_factor(&mut self) -> Result<Expression, String> {
-        // 先 peek() 查看下一个 token 是什么
-        let next_token = self
-            .peek()
-            .cloned()
-            .ok_or_else(|| "Unexpected end of input, expected a factor.".to_string())?;
-
-        match &next_token.token_type {
-            // <factor> ::= <int>
-            TokenType::IntegerConstant(val) => {
-                self.consume(); // 匹配成功，现在消费它
-                Ok(Expression::Constant(*val))
-            }
-
-            // <factor> ::= <identifier>
-            TokenType::Identifier(name) => {
-                self.consume(); // 匹配成功，现在消费它
-                Ok(Expression::Var(name.clone()))
-            }
-
-            // <factor> ::= <unop> <factor>
-            TokenType::Minus | TokenType::Tilde | TokenType::Not => {
-                self.consume(); // 消费一元运算符
-                let operator = self.token_to_unary_operator(&next_token.token_type)?;
-                // 递归调用 parse_factor 来解析后面的因子
-                let expression = self.parse_factor()?;
-                Ok(Expression::Unary {
-                    operator,
-                    expression: Box::new(expression),
-                })
-            }
-
-            // <factor> ::= "(" <exp> ")"
-            TokenType::OpenParen => {
-                self.consume(); // 消费 '('
-                let inner_expression = self.parse_expression(0)?;
-                self.expect_token(TokenType::CloseParen)?; // 消费 ')'
-                Ok(inner_expression)
-            }
-
-            _ => Err(format!(
-                "Unexpected token {:?}, expected a factor (integer, identifier, unary operator, or '(').",
-                next_token.token_type
-            )),
-        }
-    }
-
-    /// 【修改】解析一元运算符，现在从 token 类型直接转换
+    /// 将 TokenType 转换为 UnaryOperator。
     fn token_to_unary_operator(&self, token_type: &TokenType) -> Result<UnaryOperator, String> {
         match token_type {
             TokenType::Minus => Ok(UnaryOperator::Negate),
@@ -474,289 +582,289 @@ impl<'a> Parser<'a> {
             )),
         }
     }
-
-    // 原始的 parse_unary_operator 不再需要，因为逻辑已合并到 parse_factor 中
 }
 
+// src/parser.rs -> tests 模块
 #[cfg(test)]
 mod tests {
     use super::*; // 导入父模块（也就是你的 parser）的所有内容
-    use crate::lexer::Lexer; // 导入 Lexer
+    use crate::lexer::Lexer;
 
-    // 在这里写我们的调试测试
-    #[test]
-    fn debug_parsing_of_parenthesized_expression_statement() {
-        // 1. 定义一个最小化的、能复现问题的 C 代码字符串
-        // 这个例子 "(a);" 是一个合法的表达式语句，它会暴露你 parse_factor 中的 bug。
-        let source_code = "int main(void) {
-    if (1)
-        return c;
-    int c = 0;
-}";
-
-        // 2. 像你的 main.rs 一样，先进行词法分析
-        println!("--- Lexing source code ---");
-        let lexer = Lexer::new(source_code);
-        let tokens: Vec<Token> = lexer.collect::<Result<_, _>>().unwrap();
-        println!("{:#?}", tokens); // 打印出 tokens 方便查看
-
-        // 3. 创建 Parser 并调用 parse 方法
-        println!("\n--- Parsing tokens ---");
-        let mut parser = Parser::new(&tokens);
-        let result = parser.parse();
-
-        // 4. 断言结果并打印
-        // 我们期望它能成功解析。如果失败，测试会 panic 并打印出详细的错误信息。
-        // 这就是我们想要的调试入口！
-        match result {
-            Ok(ast) => {
-                println!("\n--- Successfully Parsed AST ---");
-                println!("{:#?}", ast);
-                // 如果成功了，我们可以断言它成功了
-                assert!(true);
-            }
-            Err(e) => {
-                // 如果失败了，为了调试，我们故意让测试失败并打印错误
-                panic!("\n--- PARSING FAILED! ---\nError: {}", e);
-            }
-        }
-    }
-
+    // --- 【重构】测试复合语句 ---
     #[test]
     fn test_compound_statement() {
-        // 一个包含复合语句的 C 代码
         let source_code = r#"
-        int main(void) {
-            int a = 1;
-            {
-                int b = 2;
-                return b;
+            int main(void) {
+                int a = 1;
+                {
+                    int b = 2;
+                    return b;
+                }
+                return a;
             }
-            return a;
-        }
-    "#;
-
+        "#;
         println!("--- Testing Compound Statement ---");
         println!("Source:\n{}", source_code);
 
-        // 1. 词法分析
-        let lexer = Lexer::new(source_code);
-        let tokens: Vec<Token> = lexer.collect::<Result<_, _>>().expect("Lexing failed");
-
-        // 2. 语法分析
-        let mut parser = Parser::new(&tokens);
-        let program = parser.parse().expect("Parsing failed");
+        // 1. & 2. 词法分析和语法分析
+        let tokens: Vec<Token> = Lexer::new(source_code).collect::<Result<_, _>>().unwrap();
+        let program = Parser::new(&tokens).parse().expect("Parsing failed");
 
         // 3. 断言 AST 结构
-        // 我们来验证解析出的 AST 是否符合我们的预期
 
-        // main 函数应该有 3 个块项目
+        // 程序应该只包含一个顶层声明，即 main 函数
         assert_eq!(
-            program.function.body.blocks.len(),
-            3,
-            "Function body should have 3 block items"
+            program.declarations.len(),
+            1,
+            "Program should contain one declaration"
         );
 
-        // 第一个项目：int a = 1; (这是一个声明)
-        let first_item = &program.function.body.blocks[0];
-        assert!(
-            matches!(first_item, BlockItem::D(_)),
-            "First item should be a Declaration"
-        );
+        // 获取 main 函数的声明
+        if let Declaration::Function {
+            name,
+            body: Some(main_body),
+            ..
+        } = &program.declarations[0]
+        {
+            assert_eq!(name, "main", "Function name should be 'main'");
 
-        // 第二个项目：{...} (这是一个复合语句)
-        let second_item = &program.function.body.blocks[1];
-        if let BlockItem::S(Statement::Compound(inner_block)) = second_item {
-            // 复合语句内部应该有 2 个块项目
+            // main 函数体应该有 3 个块项目
             assert_eq!(
-                inner_block.blocks.len(),
-                2,
-                "Inner block should have 2 items"
+                main_body.blocks.len(),
+                3,
+                "Function body should have 3 block items"
             );
 
-            // 复合语句的第一个项目：int b = 2;
-            assert!(
-                matches!(inner_block.blocks[0], BlockItem::D(_)),
-                "Inner block's first item should be a Declaration"
-            );
+            // 第一个项目：int a = 1; (这是一个变量声明)
+            let first_item = &main_body.blocks[0];
+            assert!(matches!(
+                first_item,
+                BlockItem::D(Declaration::Variable { .. })
+            ));
 
-            // 复合语句的第二个项目：return b;
-            assert!(
-                matches!(inner_block.blocks[1], BlockItem::S(Statement::Return(_))),
-                "Inner block's second item should be a Return statement"
-            );
+            // 第二个项目：{...} (这是一个复合语句)
+            let second_item = &main_body.blocks[1];
+            if let BlockItem::S(Statement::Compound(inner_block)) = second_item {
+                assert_eq!(
+                    inner_block.blocks.len(),
+                    2,
+                    "Inner block should have 2 items"
+                );
+
+                // 复合语句的第一个项目：int b = 2;
+                assert!(matches!(
+                    &inner_block.blocks[0],
+                    BlockItem::D(Declaration::Variable { .. })
+                ));
+
+                // 复合语句的第二个项目：return b;
+                assert!(matches!(
+                    &inner_block.blocks[1],
+                    BlockItem::S(Statement::Return(_))
+                ));
+            } else {
+                panic!(
+                    "Second item should be a Compound statement. Got: {:?}",
+                    second_item
+                );
+            }
+
+            // 第三个项目：return a;
+            let third_item = &main_body.blocks[2];
+            assert!(matches!(third_item, BlockItem::S(Statement::Return(_))));
         } else {
             panic!(
-                "Second item in function body should be a Compound statement. Got: {:?}",
-                second_item
+                "Expected a function definition for 'main'. Got: {:?}",
+                program.declarations[0]
             );
         }
-
-        // 第三个项目：return a; (这是一个返回语句)
-        let third_item = &program.function.body.blocks[2];
-        assert!(
-            matches!(third_item, BlockItem::S(Statement::Return(_))),
-            "Third item should be a Return statement"
-        );
 
         println!("\n--- Compound Statement Test Passed! ---");
     }
-    // 在 src/parser.rs 的 tests 模块中添加这个新测试
-    // 在 src/parser.rs 的 tests 模块中
 
+    // --- 【重构】测试所有循环和跳转语句 ---
     #[test]
     fn test_parsing_of_all_loop_and_jump_statements() {
-        // 1. Arrange
         let source_code = r#"
-        int main(void) {
-            for (int i = 0; i < 10; i = i + 1) {
-                while (1) {
-                    do {
-                        if (i == 5)
-                            continue;
-                        break;
-                    } while (i < 8);
+            int main(void) {
+                for (int i = 0; i < 10; i = i + 1) {
+                    while (1) {
+                        do {
+                            if (i == 5)
+                                continue;
+                            break;
+                        } while (i < 8);
+                    }
                 }
+                return 0;
             }
-            return 0;
-        }
-    "#;
-
+        "#;
         println!("\n--- Testing All Loop and Jump Statements ---");
         println!("Source:\n{}", source_code);
 
-        // 2. Act
-        let lexer = Lexer::new(source_code);
-        let tokens: Vec<Token> = lexer.collect::<Result<_, _>>().expect("Lexing failed");
-
-        let mut parser = Parser::new(&tokens);
-        let program = parser.parse().expect("Parsing failed");
+        // 1. & 2. 词法分析和语法分析
+        let tokens: Vec<Token> = Lexer::new(source_code).collect::<Result<_, _>>().unwrap();
+        let program = Parser::new(&tokens).parse().expect("Parsing failed");
         println!("--- Successfully Parsed AST ---\n{:#?}", program);
 
-        // 3. Assert
+        // 3. 断言 AST 结构
         assert_eq!(
-            program.function.body.blocks.len(),
-            2,
-            "Function body should have a for-loop and a return statement"
+            program.declarations.len(),
+            1,
+            "Program should contain one declaration"
         );
 
-        // --- 断言 `for` 循环 ---
-        if let BlockItem::S(Statement::For {
-            init,
-            condition,
-            post,
-            body,
-        }) = &program.function.body.blocks[0]
+        if let Declaration::Function {
+            body: Some(main_body),
+            ..
+        } = &program.declarations[0]
         {
-            // 对于 Box<T>，我们需要解引用一次 (`**b`) 才能访问到 T
-            assert!(
-                matches!(init, Some(b) if matches!(**b, BlockItem::D(_))),
-                "For loop init should be a declaration"
-            );
-            // 对于 Option<T>，我们不需要解引用
-            assert!(
-                matches!(condition, Some(Expression::Binary { .. })),
-                "For loop condition should be a binary expression"
-            );
-            assert!(
-                matches!(post, Some(Expression::Assign { .. })),
-                "For loop post-expression should be an assignment"
+            // main 函数体应该包含 `for` 循环和 `return 0;`
+            assert_eq!(
+                main_body.blocks.len(),
+                2,
+                "Function body should have a for-loop and a return statement"
             );
 
-            // --- 断言 `for` 循环体内的 `while` 循环 ---
-            // body 是 &Box<Statement>，解引用一次得到 &Statement
-            if let Statement::Compound(for_body_block) = &**body {
-                assert_eq!(
-                    for_body_block.blocks.len(),
-                    1,
-                    "For loop body should contain one statement (the while loop)"
-                );
+            // --- 断言 `for` 循环 ---
+            // 注意：现在 for 循环是 BlockItem::S(Statement::For { ... })
+            if let BlockItem::S(Statement::For { body, .. }) = &main_body.blocks[0] {
+                // (为了简洁，我们只深入检查 body 部分，其他部分在之前的测试已覆盖)
 
-                if let BlockItem::S(Statement::While {
-                    condition: while_cond,
-                    body: while_body,
-                }) = &for_body_block.blocks[0]
-                {
-                    // 【修复】while_cond 是 &Expression，不需要解引用或只需一次
-                    assert!(
-                        matches!(while_cond, Expression::Constant(1)),
-                        "While condition should be the constant 1"
-                    );
+                // --- 断言 `for` 循环体内的 `while` 循环 ---
+                if let Statement::Compound(for_body_block) = &**body {
+                    if let BlockItem::S(Statement::While {
+                        body: while_body, ..
+                    }) = &for_body_block.blocks[0]
+                    {
+                        // --- 断言 `while` 循环体内的 `do-while` 循环 ---
+                        if let Statement::Compound(while_body_block) = &**while_body {
+                            if let BlockItem::S(Statement::DoWhile {
+                                body: do_while_body,
+                                ..
+                            }) = &while_body_block.blocks[0]
+                            {
+                                // --- 断言 `do-while` 循环体内的 `if` 和 `break` ---
+                                if let Statement::Compound(do_while_body_block) = &**do_while_body {
+                                    assert_eq!(
+                                        do_while_body_block.blocks.len(),
+                                        2,
+                                        "Do-while body should contain an if statement and a break statement"
+                                    );
 
-                    // --- 断言 `while` 循环体内的 `do-while` 循环 ---
-                    if let Statement::Compound(while_body_block) = &**while_body {
-                        assert_eq!(
-                            while_body_block.blocks.len(),
-                            1,
-                            "While loop body should contain one statement (the do-while loop)"
-                        );
+                                    // 断言 if (i == 5) continue;
+                                    let if_stmt = &do_while_body_block.blocks[0];
+                                    assert!(
+                                        matches!(if_stmt, BlockItem::S(Statement::If { then_stat, .. }) if matches!(**then_stat, Statement::Continue))
+                                    );
 
-                        if let BlockItem::S(Statement::DoWhile {
-                            body: do_while_body,
-                            condition: do_while_cond,
-                        }) = &while_body_block.blocks[0]
-                        {
-                            // 【修复】do_while_cond 是 &Expression
-                            assert!(
-                                matches!(do_while_cond, Expression::Binary { .. }),
-                                "Do-while condition should be a binary expression"
-                            );
-
-                            // --- 断言 `do-while` 循环体内的 `if` 和 `break` ---
-                            if let Statement::Compound(do_while_body_block) = &**do_while_body {
-                                assert_eq!(
-                                    do_while_body_block.blocks.len(),
-                                    2,
-                                    "Do-while body should contain an if statement and a break statement"
-                                );
-
-                                // 断言 if (i == 5) continue;
-                                let if_stmt = &do_while_body_block.blocks[0];
-                                assert!(
-                                    matches!(if_stmt, BlockItem::S(Statement::If {
-                                     condition: _,
-                                     then_stat,
-                                     else_stat: None,
-                                     // 【修复】then_stat 是 &Box<Statement>，解引用一次得到 &Statement
-                                 }) if matches!(**then_stat, Statement::Continue)),
-                                    "First statement in do-while should be 'if (...) continue;'"
-                                );
-
-                                // 断言 break;
-                                let break_stmt = &do_while_body_block.blocks[1];
-                                assert!(
-                                    matches!(break_stmt, BlockItem::S(Statement::Break)),
-                                    "Second statement in do-while should be a break statement"
-                                );
+                                    // 断言 break;
+                                    let break_stmt = &do_while_body_block.blocks[1];
+                                    assert!(matches!(break_stmt, BlockItem::S(Statement::Break)));
+                                } else {
+                                    panic!("Do-while body is not a compound statement");
+                                }
                             } else {
-                                panic!("Do-while body is not a compound statement");
+                                panic!("Statement in while body is not a do-while loop");
                             }
                         } else {
-                            panic!("Statement in while body is not a do-while loop");
+                            panic!("While body is not a compound statement");
                         }
                     } else {
-                        panic!("While body is not a compound statement");
+                        panic!("Statement in for body is not a while loop");
                     }
                 } else {
-                    panic!("Statement in for body is not a while loop");
+                    panic!("For loop body is not a compound statement");
                 }
             } else {
-                panic!("For loop body is not a compound statement");
+                panic!(
+                    "First statement in function is not a for loop. Got: {:?}",
+                    main_body.blocks[0]
+                );
             }
+
+            // --- 断言最后的 return 语句 ---
+            let last_item = &main_body.blocks[1];
+            assert!(matches!(last_item, BlockItem::S(Statement::Return(_))));
         } else {
-            panic!(
-                "First statement in function is not a for loop. Got: {:?}",
-                program.function.body.blocks[0]
-            );
+            panic!("Expected a function definition");
         }
 
-        // --- 断言最后的 return 语句 ---
-        let last_item = &program.function.body.blocks[1];
-        assert!(
-            matches!(last_item, BlockItem::S(Statement::Return(_))),
-            "The last statement should be a return"
+        println!("\n--- All Loop and Jump Statements Test Passed! ---");
+    }
+
+    // --- 【新增】一个测试来验证函数声明和函数调用 ---
+    #[test]
+    fn test_function_declaration_and_call() {
+        let source_code = r#"
+            int add(int a, int b); 
+
+            int main(void) {
+                return add(2, 3); 
+            }
+
+            int add(int x, int y) {
+                return x + y;
+            }
+        "#;
+        println!("\n--- Testing Function Declaration and Call ---");
+        println!("Source:\n{}", source_code);
+
+        let tokens: Vec<Token> = Lexer::new(source_code).collect::<Result<_, _>>().unwrap();
+        let program = Parser::new(&tokens).parse().expect("Parsing failed");
+
+        // 断言顶层有 3 个声明
+        assert_eq!(
+            program.declarations.len(),
+            3,
+            "Program should have 3 top-level declarations"
         );
 
-        println!("\n--- All Loop and Jump Statements Test Passed! ---");
+        // 1. `add` 的原型声明
+        if let Declaration::Function {
+            name,
+            params,
+            body: None,
+        } = &program.declarations[0]
+        {
+            assert_eq!(name, "add");
+            assert_eq!(params.len(), 2);
+        } else {
+            panic!("Expected a function prototype for 'add'.");
+        }
+
+        // 2. `main` 的定义
+        if let Declaration::Function {
+            name,
+            body: Some(main_body),
+            ..
+        } = &program.declarations[1]
+        {
+            assert_eq!(name, "main");
+            // 断言 main 的函数体
+            if let BlockItem::S(Statement::Return(expr)) = &main_body.blocks[0] {
+                assert!(matches!(expr, Expression::FunctionCall { name, .. } if name == "add"));
+            } else {
+                panic!("Expected a return statement with a function call");
+            }
+        } else {
+            panic!("Expected a function definition for 'main'.");
+        }
+
+        // 3. `add` 的定义
+        if let Declaration::Function {
+            name,
+            params,
+            body: Some(_),
+            ..
+        } = &program.declarations[2]
+        {
+            assert_eq!(name, "add");
+            assert_eq!(params.len(), 2);
+        } else {
+            panic!("Expected a function definition for 'add'.");
+        }
+
+        println!("\n--- Function Declaration and Call Test Passed! ---");
     }
 }

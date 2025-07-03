@@ -18,18 +18,38 @@ impl<'a> LoopLabeler<'a> {
         }
     }
 
-    // 主入口函数：接收 unchecked::Program，返回 checked::Program
+    // 接收 unchecked::Program，返回 checked::Program
     pub fn label_program(&mut self, prog: unchecked::Program) -> Result<checked::Program, String> {
-        let func = self.label_function(prog.function)?;
-        Ok(checked::Program { function: func })
-    }
-
-    fn label_function(&mut self, func: unchecked::Function) -> Result<checked::Function, String> {
-        let body = self.label_block(func.body)?;
-        Ok(checked::Function {
-            name: func.name,
-            body,
+        let mut decls = Vec::new();
+        // 遍历所有顶层声明
+        for decl in prog.declarations {
+            decls.push(self.label_declaration(decl)?);
+        }
+        Ok(checked::Program {
+            declarations: decls,
         })
+    }
+    // --- 【修改】处理声明 ---
+    fn label_declaration(
+        &mut self,
+        decl: unchecked::Declaration,
+    ) -> Result<checked::Declaration, String> {
+        match decl {
+            unchecked::Declaration::Function { name, params, body } => {
+                // 函数体可能不存在（函数原型），所以是 Option<Block>
+                let checked_body = body.map(|b| self.label_block(b)).transpose()?;
+                Ok(checked::Declaration::Function {
+                    name,
+                    params, // 参数列表是 String，不包含需要标记的语句
+                    body: checked_body,
+                })
+            }
+            // 变量声明不包含语句，直接转换
+            unchecked::Declaration::Variable { name, init } => {
+                // 全局/局部变量的 init 是 Expression，不包含语句，直接移动
+                Ok(checked::Declaration::Variable { name, init })
+            }
+        }
     }
 
     fn label_block(&mut self, block: unchecked::Block) -> Result<checked::Block, String> {
@@ -39,15 +59,16 @@ impl<'a> LoopLabeler<'a> {
         }
         Ok(checked::Block { blocks: items })
     }
-
     fn label_block_item(
         &mut self,
         item: unchecked::BlockItem,
     ) -> Result<checked::BlockItem, String> {
         match item {
             unchecked::BlockItem::S(stmt) => Ok(checked::BlockItem::S(self.label_statement(stmt)?)),
-            // Declaration 不变，直接移动
-            unchecked::BlockItem::D(decl) => Ok(checked::BlockItem::D(decl)),
+            // 当块内有声明时，也需要递归地转换它
+            unchecked::BlockItem::D(decl) => {
+                Ok(checked::BlockItem::D(self.label_declaration(decl)?))
+            }
         }
     }
 
@@ -157,7 +178,6 @@ mod tests {
     use crate::ast::unchecked::*;
     use crate::common::UniqueIdGenerator;
 
-    // 辅助函数，用于创建一个包含嵌套循环的 unchecked AST
     fn create_test_unchecked_ast() -> Program {
         // C 代码等价物:
         // int main(void) {
@@ -171,10 +191,12 @@ mod tests {
         //     return 0;
         // }
 
+        // --- 新的 AST 结构 ---
         Program {
-            function: Function {
+            declarations: vec![Declaration::Function {
                 name: "main".to_string(),
-                body: Block {
+                params: Vec::new(),
+                body: Some(Block {
                     blocks: vec![
                         BlockItem::S(Statement::While {
                             condition: Expression::Constant(1),
@@ -201,8 +223,8 @@ mod tests {
                         }),
                         BlockItem::S(Statement::Return(Expression::Constant(0))),
                     ],
-                },
-            },
+                }),
+            }],
         }
     }
 
@@ -216,10 +238,17 @@ mod tests {
             .label_program(unchecked_ast)
             .expect("Labeling should succeed");
 
-        // 断言顶层结构
-        let main_body_items = &checked_ast.function.body.blocks;
+        // --- 从 Program 中提取 main 函数 ---
+        let main_func = match &checked_ast.declarations[0] {
+            checked::Declaration::Function { name, body, .. } if name == "main" => {
+                body.as_ref().unwrap()
+            }
+            _ => panic!("Expected main function"),
+        };
+        let main_body_items = &main_func.blocks;
         assert_eq!(main_body_items.len(), 2);
 
+        // 后续的断言逻辑可以保持不变
         // --- 深入检查外层 while 循环 (应该有 id=0) ---
         if let checked::BlockItem::S(checked::Statement::While {
             id: while_id,
@@ -233,7 +262,6 @@ mod tests {
                 let while_body_items = &while_block.blocks;
                 assert_eq!(while_body_items.len(), 2);
 
-                // --- 检查内层 for 循环 (应该有 id=1) ---
                 if let checked::BlockItem::S(checked::Statement::For {
                     id: for_id,
                     body: for_body,
@@ -241,35 +269,24 @@ mod tests {
                 }) = &while_body_items[0]
                 {
                     assert_eq!(*for_id, 1, "Inner for loop should have id 1");
-
                     if let checked::Statement::Compound(for_block) = &**for_body {
                         let for_body_items = &for_block.blocks;
                         assert_eq!(for_body_items.len(), 2);
-
-                        // 检查 if { continue; } -> continue 的 target_id 应该是 1
                         if let checked::BlockItem::S(checked::Statement::If { then_stat, .. }) =
                             &for_body_items[0]
                         {
                             if let checked::Statement::Continue { target_id } = **then_stat {
-                                assert_eq!(
-                                    target_id, 1,
-                                    "Continue should target inner for loop (id 1)"
-                                );
+                                assert_eq!(target_id, 1);
                             } else {
                                 panic!("Expected Continue statement");
                             }
                         } else {
                             panic!("Expected If statement");
                         }
-
-                        // 检查 break; -> break 的 target_id 应该是 1
                         if let checked::BlockItem::S(checked::Statement::Break { target_id }) =
                             &for_body_items[1]
                         {
-                            assert_eq!(
-                                *target_id, 1,
-                                "Inner break should target inner for loop (id 1)"
-                            );
+                            assert_eq!(*target_id, 1);
                         } else {
                             panic!("Expected Break statement");
                         }
@@ -279,15 +296,10 @@ mod tests {
                 } else {
                     panic!("Expected For loop");
                 }
-
-                // --- 检查外层的 break (target_id 应该是 0) ---
                 if let checked::BlockItem::S(checked::Statement::Break { target_id }) =
                     &while_body_items[1]
                 {
-                    assert_eq!(
-                        *target_id, 0,
-                        "Outer break should target outer while loop (id 0)"
-                    );
+                    assert_eq!(*target_id, 0);
                 } else {
                     panic!("Expected Break statement");
                 }
@@ -297,31 +309,25 @@ mod tests {
         } else {
             panic!("Expected a While loop as the first statement");
         }
-
-        println!("--- Loop Labeling Success Test Passed! ---");
     }
 
     #[test]
     fn test_break_outside_of_loop_fails() {
-        // C 代码等价物: int main(void) { break; }
         let unchecked_ast = Program {
-            function: Function {
+            declarations: vec![Declaration::Function {
                 name: "main".to_string(),
-                body: Block {
+                params: Vec::new(),
+                body: Some(Block {
                     blocks: vec![BlockItem::S(Statement::Break)],
-                },
-            },
+                }),
+            }],
         };
 
         let mut id_gen = UniqueIdGenerator::new();
         let mut labeler = LoopLabeler::new(&mut id_gen);
 
         let result = labeler.label_program(unchecked_ast);
-        assert!(
-            result.is_err(),
-            "Labeling should fail for a break outside a loop"
-        );
+        assert!(result.is_err());
         assert_eq!(result.unwrap_err(), "'break' statement not in a loop");
-        println!("--- Break Outside Loop Failure Test Passed! ---");
     }
 }

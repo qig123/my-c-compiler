@@ -1,17 +1,27 @@
 //src/ast.rs
 pub mod unchecked {
-    // --- AST Node Definitions ---
-    // 这些定义与你之前的版本一致，并且是正确的。
-    #[derive(Debug, PartialEq)] // 派生 PartialEq 以便测试
+    // Program 现在包含一个声明列表
+    #[derive(Debug, PartialEq)]
     pub struct Program {
-        pub function: Function,
+        pub declarations: Vec<Declaration>,
     }
 
+    // Declaration 枚举现在是顶层项目之一
     #[derive(Debug, PartialEq)]
-    pub struct Function {
-        pub name: String,
-        pub body: Block,
+    pub enum Declaration {
+        // 函数声明/定义
+        Function {
+            name: String,
+            params: Vec<String>, // 参数列表
+            body: Option<Block>, // Option<Block> 可以区分声明和定义
+        },
+        // 变量声明 (用于全局变量)
+        Variable {
+            name: String,
+            init: Option<Expression>,
+        },
     }
+    // Block 和 BlockItem 的定义是正确的
     #[derive(Debug, PartialEq)]
     pub struct Block {
         pub blocks: Vec<BlockItem>,
@@ -23,25 +33,18 @@ pub mod unchecked {
         D(Declaration),
     }
 
-    #[derive(Debug, PartialEq)]
-    pub struct Declaration {
-        // 【修改】字段设为 pub，以便在其他模块（如语义分析）中访问
-        pub name: String,
-        pub init: Option<Expression>,
-    }
-
+    // ForInit 的表示方式 (Option<Box<BlockItem>>) 是正确的，无需修改 Statement
     #[derive(Debug, PartialEq)]
     pub enum Statement {
         Return(Expression),
         Expression(Expression),
-        Empty,
+        Empty, // 对应 Null statement
         If {
             condition: Expression,
             then_stat: Box<Statement>,
             else_stat: Option<Box<Statement>>,
         },
         Compound(Block),
-        // --- 【新增】循环和跳转语句 (无标签) ---
         While {
             condition: Expression,
             body: Box<Statement>,
@@ -51,9 +54,9 @@ pub mod unchecked {
             condition: Expression,
         },
         For {
-            init: Option<Box<BlockItem>>, // For 循环的 init 可以是声明或表达式
+            init: Option<Box<BlockItem>>,
             condition: Option<Expression>,
-            post: Option<Expression>, // 循环后的表达式
+            post: Option<Expression>,
             body: Box<Statement>,
         },
         Break,
@@ -106,6 +109,10 @@ pub mod unchecked {
             left: Box<Expression>,
             right: Box<Expression>,
         },
+        FunctionCall {
+            name: String,
+            args: Vec<Expression>,
+        },
     }
 }
 
@@ -129,13 +136,24 @@ pub mod checked {
 
     #[derive(Debug, PartialEq)]
     pub struct Program {
-        pub function: Function,
+        // Program 现在也包含一个声明列表
+        pub declarations: Vec<Declaration>,
     }
 
     #[derive(Debug, PartialEq)]
-    pub struct Function {
-        pub name: String,
-        pub body: Block,
+    pub enum Declaration {
+        Function {
+            name: String,
+            params: Vec<String>,
+            // 函数体是 checked::Block
+            body: Option<Block>,
+        },
+        Variable {
+            name: String,
+            // 注意：init 表达式也应该是 checked 的，
+            // 但因为 Expression 没有子 Statement，所以可以直接复用
+            init: Option<Expression>,
+        },
     }
 
     // --- 【核心变化】---
@@ -149,7 +167,8 @@ pub mod checked {
     #[derive(Debug, PartialEq)]
     pub enum BlockItem {
         S(Statement),
-        D(super::unchecked::Declaration), // Declaration 不包含 Statement，可以直接复用
+        // 局部变量声明
+        D(Declaration),
     }
 
     #[derive(Debug, PartialEq)]
