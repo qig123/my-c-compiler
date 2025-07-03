@@ -5,6 +5,9 @@ use crate::ast::checked;
 use crate::common::UniqueIdGenerator;
 use crate::ir::tacky;
 
+const LOOP_START_PREFIX: &str = "loop_start";
+const CONTINUE_LABEL_PREFIX: &str = "continue";
+const BREAK_LABEL_PREFIX: &str = "break";
 /// 负责将 C AST 转换为 TACKY IR 的生成器。
 pub struct TackyGenerator<'a> {
     /// 【新增】用于生成唯一标签名的计数器。
@@ -33,6 +36,10 @@ impl<'a> TackyGenerator<'a> {
     fn make_label_with_prefix(&mut self, prefix: &str) -> String {
         let label = format!("_{}_{}", prefix, self.label_counter);
         self.label_counter += 1;
+        label
+    }
+    fn make_label_with_id(&mut self, prefix: &str, id: usize) -> String {
+        let label = format!("_{}_{}", prefix, id);
         label
     }
 
@@ -409,8 +416,111 @@ impl<'a> TackyGenerator<'a> {
                 Ok(())
             }
             checked::Statement::Compound(b) => self.generate_tacky_for_block(b, instructions),
-            _ => {
-                panic!()
+            &checked::Statement::Break { target_id } => {
+                instructions.push(tacky::Instruction::Jump(
+                    self.make_label_with_id(BREAK_LABEL_PREFIX, target_id),
+                ));
+                Ok(())
+            }
+            &checked::Statement::Continue { target_id } => {
+                instructions.push(tacky::Instruction::Jump(
+                    self.make_label_with_id(CONTINUE_LABEL_PREFIX, target_id),
+                ));
+                Ok(())
+            }
+
+            &checked::Statement::DoWhile {
+                ref body,
+                ref condition,
+                id,
+            } => {
+                let start_label = self.make_label_with_id(LOOP_START_PREFIX, id);
+                let continue_label = self.make_label_with_id(CONTINUE_LABEL_PREFIX, id);
+                let break_label = self.make_label_with_id(BREAK_LABEL_PREFIX, id);
+                // 1. Label(start)
+                instructions.push(tacky::Instruction::Label(start_label.clone()));
+                // 2. <instructions for body>
+                self.generate_tacky_for_statement(&*body, instructions)?;
+                // 3. Label(continue_label)
+                instructions.push(tacky::Instruction::Label(continue_label));
+                // 4. <instructions for condition>
+                let cond_val = self.generate_tacky_for_expression(&condition, instructions)?;
+                // 5. JumpIfNotZero(v, start)
+                instructions.push(tacky::Instruction::JumpIfNotZero {
+                    condition: cond_val,
+                    target: start_label,
+                });
+                // 6. Label(break_label)
+                instructions.push(tacky::Instruction::Label(break_label));
+                Ok(())
+            }
+            &checked::Statement::While {
+                ref condition,
+                ref body,
+                id,
+            } => {
+                let continue_label = self.make_label_with_id(CONTINUE_LABEL_PREFIX, id);
+                let break_label = self.make_label_with_id(BREAK_LABEL_PREFIX, id);
+                // Label(continue_label)
+                instructions.push(tacky::Instruction::Label(continue_label.clone()));
+                // <instructions for condition>
+                // v = <result of condition>
+                let cond_val = self.generate_tacky_for_expression(&condition, instructions)?;
+                // JumpIfZero(v, break_label)
+                instructions.push(tacky::Instruction::JumpIfZero {
+                    condition: cond_val,
+                    target: break_label.clone(),
+                });
+                // <instructions for body>
+                self.generate_tacky_for_statement(&*body, instructions)?;
+                // Jump(continue_label)
+                instructions.push(tacky::Instruction::Jump(continue_label));
+                // Label(break_label)
+                instructions.push(tacky::Instruction::Label(break_label));
+
+                Ok(())
+            }
+            &checked::Statement::For {
+                ref init,
+                ref condition,
+                ref post,
+                ref body,
+                id,
+            } => {
+                // 1. 【生成标签名】
+                let start_label = self.make_label_with_id(LOOP_START_PREFIX, id);
+                let continue_label = self.make_label_with_id(CONTINUE_LABEL_PREFIX, id);
+                let break_label = self.make_label_with_id(BREAK_LABEL_PREFIX, id);
+                // 2. 【严格遵循模板生成指令】
+                // <instructions for init>
+                if let Some(init_item) = init {
+                    self.generate_tacky_for_block_item(init_item, instructions)?;
+                }
+                // Label(start)
+                instructions.push(tacky::Instruction::Label(start_label.clone()));
+                // <instructions for condition> 和 JumpIfZero
+                if let Some(cond_expr) = condition {
+                    let cond_val = self.generate_tacky_for_expression(cond_expr, instructions)?;
+                    instructions.push(tacky::Instruction::JumpIfZero {
+                        condition: cond_val,
+                        target: break_label.clone(),
+                    });
+                }
+                // 如果 condition 为 None，则不生成 Jump指令，形成无限循环，符合要求。
+                // <instructions for body>
+                self.generate_tacky_for_statement(body, instructions)?;
+                // 【修复】Label(continue_label) - 这是 continue 语句的目标
+                instructions.push(tacky::Instruction::Label(continue_label));
+                // <instructions for post>
+                if let Some(post_expr) = post {
+                    // post 表达式的计算结果被丢弃，但指令仍需生成
+                    self.generate_tacky_for_expression(post_expr, instructions)?;
+                }
+                // Jump(start)
+                instructions.push(tacky::Instruction::Jump(start_label));
+                // Label(break_label) - 这是 break 语句和循环正常退出的目标
+                instructions.push(tacky::Instruction::Label(break_label));
+                Ok(())
             }
         }
     }
