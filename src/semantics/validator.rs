@@ -1,10 +1,7 @@
 //! src/semantics/validator.rs
 
 // 【修改】 在 use 语句中明确列出所有需要的类型，包括 Empty
-use crate::{
-    common::UniqueIdGenerator,
-    parser::{Block, BlockItem, Declaration, Expression, Function, Program, Statement},
-};
+use crate::{ast::unchecked::*, common::UniqueIdGenerator};
 use std::collections::HashMap;
 
 /// The Validator performs semantic analysis, specifically variable resolution.
@@ -159,6 +156,9 @@ impl<'a> Validator<'a> {
             Statement::Compound(b) => {
                 let validated_block = self.validate_block(b)?;
                 Ok(Statement::Compound(validated_block))
+            }
+            _ => {
+                panic!()
             }
         }
     }

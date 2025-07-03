@@ -1,98 +1,10 @@
 //! src/parser.rs
 
 // 从我们的 lexer 模块中导入 Token 和 TokenType
-use crate::lexer::{Token, TokenType};
-
-// --- AST Node Definitions ---
-// 这些定义与你之前的版本一致，并且是正确的。
-#[derive(Debug, PartialEq)] // 派生 PartialEq 以便测试
-pub struct Program {
-    pub function: Function,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Function {
-    pub name: String,
-    pub body: Block,
-}
-#[derive(Debug, PartialEq)]
-pub struct Block {
-    pub blocks: Vec<BlockItem>,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum BlockItem {
-    S(Statement),
-    D(Declaration),
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Declaration {
-    // 【修改】字段设为 pub，以便在其他模块（如语义分析）中访问
-    pub name: String,
-    pub init: Option<Expression>,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Statement {
-    Return(Expression),
-    Expression(Expression),
-    Empty,
-    If {
-        condition: Expression,
-        then_stat: Box<Statement>,
-        else_stat: Option<Box<Statement>>,
-    },
-    Compound(Block),
-}
-
-#[derive(Debug, PartialEq)]
-pub enum UnaryOperator {
-    Negate,
-    Complement,
-    Not,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum BinaryOperator {
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-    Remainder,
-    And,
-    Or,
-    Equal,
-    NotEqual,
-    LessThan,
-    LessOrEqual,
-    GreaterThan,
-    GreaterOrEqual,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Expression {
-    Constant(i32),
-    Unary {
-        operator: UnaryOperator,
-        expression: Box<Expression>,
-    },
-    Binary {
-        operator: BinaryOperator,
-        left: Box<Expression>,
-        right: Box<Expression>,
-    },
-    Var(String),
-    Assign {
-        left: Box<Expression>,
-        right: Box<Expression>,
-    },
-    Conditional {
-        condition: Box<Expression>,
-        left: Box<Expression>,
-        right: Box<Expression>,
-    },
-}
+use crate::{
+    ast::unchecked::*,
+    lexer::{Token, TokenType},
+};
 
 // ... (AST 定义之后) ...
 
@@ -302,6 +214,19 @@ impl<'a> Parser<'a> {
                     let block = self.parse_block()?;
                     Ok(Statement::Compound(block))
                 }
+                TokenType::KeywordFor => self.parse_for_statement(),
+                TokenType::KeywordWhile => self.parse_while_statement(),
+                TokenType::KeywordDo => self.parse_do_while_statement(),
+                TokenType::KeywordBreak => {
+                    self.consume(); // consume 'break'
+                    self.expect_token(TokenType::Semicolon)?;
+                    Ok(Statement::Break)
+                }
+                TokenType::KeywordContinue => {
+                    self.consume();
+                    self.expect_token(TokenType::Semicolon)?;
+                    Ok(Statement::Continue)
+                }
                 _ => {
                     // 表达式语句：<exp> ;
                     let exp = self.parse_expression(0)?;
@@ -312,6 +237,102 @@ impl<'a> Parser<'a> {
         } else {
             Err("Expected a statement, but found end of input.".to_string())
         }
+    }
+    // "while" "(" <exp> ")" <statement>
+    fn parse_while_statement(&mut self) -> Result<Statement, String> {
+        self.consume(); // consume 'while'
+        self.expect_token(TokenType::OpenParen)?;
+        let condition = self.parse_expression(0)?;
+        self.expect_token(TokenType::CloseParen)?;
+        let body = self.parse_statement()?;
+        Ok(Statement::While {
+            condition,
+            body: Box::new(body),
+        })
+    }
+
+    // "do" <statement> "while" "(" <exp> ")" ";"
+    fn parse_do_while_statement(&mut self) -> Result<Statement, String> {
+        self.consume(); // consume 'do'
+        let body = self.parse_statement()?;
+        self.expect_token(TokenType::KeywordWhile)?;
+        self.expect_token(TokenType::OpenParen)?;
+        let condition = self.parse_expression(0)?;
+        self.expect_token(TokenType::CloseParen)?;
+
+        // 【修复 Bug 2】消费最后的那个分号！
+        self.expect_token(TokenType::Semicolon)?;
+
+        // 【修复 Bug 1】返回正确的 Statement::DoWhile 节点
+        Ok(Statement::DoWhile {
+            condition,
+            body: Box::new(body),
+        })
+    }
+    // for (<declaration>|<exp>; <exp>; <exp>) <statement>
+
+    fn parse_for_statement(&mut self) -> Result<Statement, String> {
+        self.consume(); // consume 'for'
+        self.expect_token(TokenType::OpenParen)?;
+
+        // 1. 解析初始化部分
+        let init = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::Semicolon)
+        {
+            None // 空的初始化
+        } else if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::KeywordInt)
+        {
+            // 是一个声明
+            Some(Box::new(self.parse_declaration().map(BlockItem::D)?))
+        } else {
+            // 是一个表达式
+            Some(Box::new(
+                self.parse_expression(0)
+                    .map(Statement::Expression)
+                    .map(BlockItem::S)?,
+            ))
+        };
+
+        // C 语言中，for(exp;) 是合法的，但 for(declaration) 不带分号是非法的。
+        // 如果是表达式，后面必须跟分号。如果是声明，分号已经在 parse_declaration 中消费了。
+        if !matches!(init, Some(ref b) if matches!(**b, BlockItem::D(_))) {
+            self.expect_token(TokenType::Semicolon)?;
+        }
+
+        // 2. 解析条件部分
+        let condition = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::Semicolon)
+        {
+            None // 空条件
+        } else {
+            Some(self.parse_expression(0)?)
+        };
+        self.expect_token(TokenType::Semicolon)?;
+
+        // 3. 解析循环后表达式
+        let post = if self
+            .peek()
+            .map_or(false, |t| t.token_type == TokenType::CloseParen)
+        {
+            None // 空的 post-expression
+        } else {
+            Some(self.parse_expression(0)?)
+        };
+        self.expect_token(TokenType::CloseParen)?;
+
+        // 4. 解析循环体
+        let body = self.parse_statement()?;
+
+        Ok(Statement::For {
+            init,
+            condition,
+            post,
+            body: Box::new(body),
+        })
     }
 
     /// 【核心修改】使用优先级爬升法解析表达式，支持右结合赋值。
@@ -579,5 +600,163 @@ mod tests {
         );
 
         println!("\n--- Compound Statement Test Passed! ---");
+    }
+    // 在 src/parser.rs 的 tests 模块中添加这个新测试
+    // 在 src/parser.rs 的 tests 模块中
+
+    #[test]
+    fn test_parsing_of_all_loop_and_jump_statements() {
+        // 1. Arrange
+        let source_code = r#"
+        int main(void) {
+            for (int i = 0; i < 10; i = i + 1) {
+                while (1) {
+                    do {
+                        if (i == 5)
+                            continue;
+                        break;
+                    } while (i < 8);
+                }
+            }
+            return 0;
+        }
+    "#;
+
+        println!("\n--- Testing All Loop and Jump Statements ---");
+        println!("Source:\n{}", source_code);
+
+        // 2. Act
+        let lexer = Lexer::new(source_code);
+        let tokens: Vec<Token> = lexer.collect::<Result<_, _>>().expect("Lexing failed");
+
+        let mut parser = Parser::new(&tokens);
+        let program = parser.parse().expect("Parsing failed");
+        println!("--- Successfully Parsed AST ---\n{:#?}", program);
+
+        // 3. Assert
+        assert_eq!(
+            program.function.body.blocks.len(),
+            2,
+            "Function body should have a for-loop and a return statement"
+        );
+
+        // --- 断言 `for` 循环 ---
+        if let BlockItem::S(Statement::For {
+            init,
+            condition,
+            post,
+            body,
+        }) = &program.function.body.blocks[0]
+        {
+            // 对于 Box<T>，我们需要解引用一次 (`**b`) 才能访问到 T
+            assert!(
+                matches!(init, Some(b) if matches!(**b, BlockItem::D(_))),
+                "For loop init should be a declaration"
+            );
+            // 对于 Option<T>，我们不需要解引用
+            assert!(
+                matches!(condition, Some(Expression::Binary { .. })),
+                "For loop condition should be a binary expression"
+            );
+            assert!(
+                matches!(post, Some(Expression::Assign { .. })),
+                "For loop post-expression should be an assignment"
+            );
+
+            // --- 断言 `for` 循环体内的 `while` 循环 ---
+            // body 是 &Box<Statement>，解引用一次得到 &Statement
+            if let Statement::Compound(for_body_block) = &**body {
+                assert_eq!(
+                    for_body_block.blocks.len(),
+                    1,
+                    "For loop body should contain one statement (the while loop)"
+                );
+
+                if let BlockItem::S(Statement::While {
+                    condition: while_cond,
+                    body: while_body,
+                }) = &for_body_block.blocks[0]
+                {
+                    // 【修复】while_cond 是 &Expression，不需要解引用或只需一次
+                    assert!(
+                        matches!(while_cond, Expression::Constant(1)),
+                        "While condition should be the constant 1"
+                    );
+
+                    // --- 断言 `while` 循环体内的 `do-while` 循环 ---
+                    if let Statement::Compound(while_body_block) = &**while_body {
+                        assert_eq!(
+                            while_body_block.blocks.len(),
+                            1,
+                            "While loop body should contain one statement (the do-while loop)"
+                        );
+
+                        if let BlockItem::S(Statement::DoWhile {
+                            body: do_while_body,
+                            condition: do_while_cond,
+                        }) = &while_body_block.blocks[0]
+                        {
+                            // 【修复】do_while_cond 是 &Expression
+                            assert!(
+                                matches!(do_while_cond, Expression::Binary { .. }),
+                                "Do-while condition should be a binary expression"
+                            );
+
+                            // --- 断言 `do-while` 循环体内的 `if` 和 `break` ---
+                            if let Statement::Compound(do_while_body_block) = &**do_while_body {
+                                assert_eq!(
+                                    do_while_body_block.blocks.len(),
+                                    2,
+                                    "Do-while body should contain an if statement and a break statement"
+                                );
+
+                                // 断言 if (i == 5) continue;
+                                let if_stmt = &do_while_body_block.blocks[0];
+                                assert!(
+                                    matches!(if_stmt, BlockItem::S(Statement::If {
+                                     condition: _,
+                                     then_stat,
+                                     else_stat: None,
+                                     // 【修复】then_stat 是 &Box<Statement>，解引用一次得到 &Statement
+                                 }) if matches!(**then_stat, Statement::Continue)),
+                                    "First statement in do-while should be 'if (...) continue;'"
+                                );
+
+                                // 断言 break;
+                                let break_stmt = &do_while_body_block.blocks[1];
+                                assert!(
+                                    matches!(break_stmt, BlockItem::S(Statement::Break)),
+                                    "Second statement in do-while should be a break statement"
+                                );
+                            } else {
+                                panic!("Do-while body is not a compound statement");
+                            }
+                        } else {
+                            panic!("Statement in while body is not a do-while loop");
+                        }
+                    } else {
+                        panic!("While body is not a compound statement");
+                    }
+                } else {
+                    panic!("Statement in for body is not a while loop");
+                }
+            } else {
+                panic!("For loop body is not a compound statement");
+            }
+        } else {
+            panic!(
+                "First statement in function is not a for loop. Got: {:?}",
+                program.function.body.blocks[0]
+            );
+        }
+
+        // --- 断言最后的 return 语句 ---
+        let last_item = &program.function.body.blocks[1];
+        assert!(
+            matches!(last_item, BlockItem::S(Statement::Return(_))),
+            "The last statement should be a return"
+        );
+
+        println!("\n--- All Loop and Jump Statements Test Passed! ---");
     }
 }

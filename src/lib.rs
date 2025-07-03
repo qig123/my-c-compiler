@@ -1,4 +1,5 @@
 //src/lib.rs
+pub mod ast;
 pub mod backend;
 pub mod common;
 pub mod ir;
