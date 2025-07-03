@@ -2,6 +2,7 @@
 
 use clap::Parser as ClapParser;
 use my_c_compiler::backend::asm_gen::AsmGenerator;
+use my_c_compiler::backend::emitter;
 use my_c_compiler::backend::tacky_gen::TackyGenerator;
 use my_c_compiler::common::UniqueIdGenerator;
 use my_c_compiler::lexer::{self, Token};
@@ -157,59 +158,59 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // println!("\n7. Emitting assembly code from Assembly AST...");
-    // let assembly_code = emitter::emit_assembly(asm_ast)?;
-    // let assembly_path = parent_dir.join(file_stem).with_extension("s");
-    // fs::write(&assembly_path, &assembly_code)?;
-    // println!(
-    //     "   ✓ Assembly code emission complete: {}",
-    //     assembly_path.display()
-    // );
+    println!("\n7. Emitting assembly code from Assembly AST...");
+    let assembly_code = emitter::emit_assembly(asm_ast)?;
+    let assembly_path = parent_dir.join(file_stem).with_extension("s");
+    fs::write(&assembly_path, &assembly_code)?;
+    println!(
+        "   ✓ Assembly code emission complete: {}",
+        assembly_path.display()
+    );
 
-    // // --- STAGE 8: ASSEMBLE or LINK ---
-    // if cli.compile_only {
-    //     println!("\n8. Assembling to object file (-c flag detected)...");
-    //     let output_path = parent_dir.join(file_stem).with_extension("o");
-    //     assemble_to_object(&assembly_path, &output_path)?;
-    //     println!("   ✓ Assembling complete: {}", output_path.display());
-    // } else {
-    //     println!("\n8. Assembling and linking...");
-    //     let output_path = parent_dir.join(file_stem);
-    //     link_to_executable(&assembly_path, &output_path)?;
-    //     println!(
-    //         "   ✓ Assembling and linking complete: {}",
-    //         output_path.display()
-    //     );
-    // }
+    // --- STAGE 8: ASSEMBLE or LINK ---
+    if cli.compile_only {
+        println!("\n8. Assembling to object file (-c flag detected)...");
+        let output_path = parent_dir.join(file_stem).with_extension("o");
+        assemble_to_object(&assembly_path, &output_path)?;
+        println!("   ✓ Assembling complete: {}", output_path.display());
+    } else {
+        println!("\n8. Assembling and linking...");
+        let output_path = parent_dir.join(file_stem);
+        link_to_executable(&assembly_path, &output_path)?;
+        println!(
+            "   ✓ Assembling and linking complete: {}",
+            output_path.display()
+        );
+    }
 
-    // // --- Cleanup ---
-    // fs::remove_file(&preprocessed_path)?;
-    // if !cli.keep_asm {
-    //     if let Err(e) = fs::remove_file(&assembly_path) {
-    //         eprintln!(
-    //             "Warning: could not remove temporary assembly file '{}': {}",
-    //             assembly_path.display(),
-    //             e
-    //         );
-    //     }
-    // } else {
-    //     println!(
-    //         "   ℹ️ Assembly file kept as requested by --keep-asm: {}",
-    //         assembly_path.display()
-    //     );
-    // }
+    // --- Cleanup ---
+    fs::remove_file(&preprocessed_path)?;
+    if !cli.keep_asm {
+        if let Err(e) = fs::remove_file(&assembly_path) {
+            eprintln!(
+                "Warning: could not remove temporary assembly file '{}': {}",
+                assembly_path.display(),
+                e
+            );
+        }
+    } else {
+        println!(
+            "   ℹ️ Assembly file kept as requested by --keep-asm: {}",
+            assembly_path.display()
+        );
+    }
 
-    // if cli.compile_only {
-    //     println!(
-    //         "\n✅ Success! Object file created at: {}",
-    //         parent_dir.join(file_stem).with_extension("o").display()
-    //     );
-    // } else {
-    //     println!(
-    //         "\n✅ Success! Executable created at: {}",
-    //         parent_dir.join(file_stem).display()
-    //     );
-    // }
+    if cli.compile_only {
+        println!(
+            "\n✅ Success! Object file created at: {}",
+            parent_dir.join(file_stem).with_extension("o").display()
+        );
+    } else {
+        println!(
+            "\n✅ Success! Executable created at: {}",
+            parent_dir.join(file_stem).display()
+        );
+    }
 
     Ok(())
 }
