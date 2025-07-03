@@ -33,6 +33,13 @@ pub enum TokenType {
     KeywordReturn,
     KeywordIf,
     KeywordElse,
+
+    KeywordDo,
+    KeywordWhile,
+    KeywordFor,
+    KeywordBreak,
+    KeywordContinue,
+
     Identifier(String),
     IntegerConstant(i32),
 }
@@ -78,6 +85,11 @@ impl<'a> Lexer<'a> {
             "return" => TokenType::KeywordReturn,
             "if" => TokenType::KeywordIf,
             "else" => TokenType::KeywordElse,
+            "continue" => TokenType::KeywordContinue,
+            "do" => TokenType::KeywordDo,
+            "while" => TokenType::KeywordWhile,
+            "for" => TokenType::KeywordFor,
+            "break" => TokenType::KeywordBreak,
             _ => TokenType::Identifier(identifier),
         }
     }
@@ -304,5 +316,208 @@ impl<'a> Iterator for Lexer<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_token()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Lexer, Token, TokenType};
+
+    #[test]
+    fn test_lex_loop_and_jump_keywords() {
+        // 1. Arrange: 准备一个包含所有新关键字的C代码片段。
+        // 我们使用一个 for 循环，内部嵌套一个 do-while 循环。
+        // 在循环中，我们使用 if 来触发 break 和 continue。
+        let source_code = r#"
+            for (i = 0; i < 10; i = i + 1) {
+                do {
+                    if (a == 5) {
+                        break;
+                    }
+                    continue;
+                } while (x > 0);
+            }
+        "#;
+
+        // 2. Arrange: 定义我们期望从 Lexer 中得到的 Token 序列。
+        // 注意：我们也要正确地指定每个 Token 所在的行号。
+        let expected_tokens = vec![
+            // line 2: for (i = 0; i < 10; i = i + 1) {
+            Token {
+                token_type: TokenType::KeywordFor,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::OpenParen,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Identifier("i".to_string()),
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Assign,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::IntegerConstant(0),
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Semicolon,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Identifier("i".to_string()),
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Less,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::IntegerConstant(10),
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Semicolon,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Identifier("i".to_string()),
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Assign,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Identifier("i".to_string()),
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::Plus,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::IntegerConstant(1),
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::CloseParen,
+                line: 2,
+            },
+            Token {
+                token_type: TokenType::OpenBrace,
+                line: 2,
+            },
+            // line 3: do {
+            Token {
+                token_type: TokenType::KeywordDo,
+                line: 3,
+            },
+            Token {
+                token_type: TokenType::OpenBrace,
+                line: 3,
+            },
+            // line 4: if (a == 5) {
+            Token {
+                token_type: TokenType::KeywordIf,
+                line: 4,
+            },
+            Token {
+                token_type: TokenType::OpenParen,
+                line: 4,
+            },
+            Token {
+                token_type: TokenType::Identifier("a".to_string()),
+                line: 4,
+            },
+            Token {
+                token_type: TokenType::Equal,
+                line: 4,
+            },
+            Token {
+                token_type: TokenType::IntegerConstant(5),
+                line: 4,
+            },
+            Token {
+                token_type: TokenType::CloseParen,
+                line: 4,
+            },
+            Token {
+                token_type: TokenType::OpenBrace,
+                line: 4,
+            },
+            // line 5: break;
+            Token {
+                token_type: TokenType::KeywordBreak,
+                line: 5,
+            },
+            Token {
+                token_type: TokenType::Semicolon,
+                line: 5,
+            },
+            // line 6: }
+            Token {
+                token_type: TokenType::CloseBrace,
+                line: 6,
+            },
+            // line 7: continue;
+            Token {
+                token_type: TokenType::KeywordContinue,
+                line: 7,
+            },
+            Token {
+                token_type: TokenType::Semicolon,
+                line: 7,
+            },
+            // line 8: } while (x > 0);
+            Token {
+                token_type: TokenType::CloseBrace,
+                line: 8,
+            },
+            Token {
+                token_type: TokenType::KeywordWhile,
+                line: 8,
+            },
+            Token {
+                token_type: TokenType::OpenParen,
+                line: 8,
+            },
+            Token {
+                token_type: TokenType::Identifier("x".to_string()),
+                line: 8,
+            },
+            Token {
+                token_type: TokenType::Greater,
+                line: 8,
+            },
+            Token {
+                token_type: TokenType::IntegerConstant(0),
+                line: 8,
+            },
+            Token {
+                token_type: TokenType::CloseParen,
+                line: 8,
+            },
+            Token {
+                token_type: TokenType::Semicolon,
+                line: 8,
+            },
+            // line 9: }
+            Token {
+                token_type: TokenType::CloseBrace,
+                line: 9,
+            },
+        ];
+
+        // 3. Act: 创建 Lexer 实例并收集所有 Tokens。
+        // 我们使用 .unwrap() 是因为我们确信这个测试代码是有效的，不会产生词法错误。
+        let lexer = Lexer::new(source_code);
+        let actual_tokens: Vec<Token> = lexer.map(|result| result.unwrap()).collect();
+
+        // 4. Assert: 比较实际生成的 Tokens 和我们期望的 Tokens。
+        assert_eq!(actual_tokens, expected_tokens);
     }
 }
