@@ -35,6 +35,9 @@ struct Cli {
     /// Do not delete the generated .s assembly file
     #[arg(long)]
     keep_asm: bool,
+    /// Only compile and assemble, do not link. Produces a .o object file.
+    #[arg(short = 'c')]
+    compile_only: bool,
     /// The C source file to compile
     input_file: PathBuf,
 }
@@ -51,9 +54,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut id_generator = UniqueIdGenerator::new();
 
-    // --- STAGE 1 & 2: PREPROCESSING and LEXING (不变) ---
+    // --- STAGE 1 & 2: PREPROCESSING and LEXING ---
     println!("1. Preprocessing {}...", cli.input_file.display());
-    // ... (preprocessing code is correct) ...
     let input_path = &cli.input_file;
     if !input_path.exists() {
         return Err(format!("Input file not found: {}", input_path.display()).into());
@@ -65,8 +67,7 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let source_code = fs::read_to_string(&preprocessed_path)?;
 
     println!("\n2. Lexing source code...");
-    let lexer = lexer::Lexer::new(&source_code);
-    let tokens: Vec<Token> = lexer.collect::<Result<_, _>>()?;
+    let tokens: Vec<Token> = lexer::Lexer::new(&source_code).collect::<Result<_, _>>()?;
     println!("   ✓ Lexing successful, found {} tokens.", tokens.len());
     if cli.lex {
         println!(
@@ -78,10 +79,9 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // --- STAGE 3: PARSING (C -> C AST) (不变) ---
+    // --- STAGE 3: PARSING ---
     println!("\n3. Parsing tokens into C Abstract Syntax Tree (AST)...");
-    let mut parser = CParser::Parser::new(&tokens);
-    let c_ast = parser.parse()?;
+    let c_ast = CParser::Parser::new(&tokens).parse()?;
     println!("   ✓ Parsing successful.");
     if cli.parse {
         println!(
@@ -92,15 +92,13 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
-    // --- 【新增】STAGE 4: SEMANTIC ANALYSIS (VALIDATION) ---
-    println!("\n4. Performing semantic analysis (validation)...");
+
+    // --- STAGE 4: SEMANTIC ANALYSIS ---
+    println!("\n4. Performing semantic analysis...");
     let mut validator = Validator::new(&mut id_generator);
-    let name_resolved_ast = validator.validate_program(c_ast)?; // c_ast is consumed
-    // println!("\n--- 2. Name-Resolved AST ---\n{:#?}", name_resolved_ast);
-    // 4. Loop Labeling -> checked AST
+    let name_resolved_ast = validator.validate_program(c_ast)?;
     let mut labeler = LoopLabeler::new(&mut id_generator);
-    let checked_ast = labeler.label_program(name_resolved_ast).unwrap();
-    // println!("\n--- 3. Checked (Labeled) AST ---\n{:#?}", checked_ast);
+    let checked_ast = labeler.label_program(name_resolved_ast)?;
     println!("   ✓ Semantic analysis successful.");
     if cli.validate {
         println!(
@@ -111,38 +109,22 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_file(&preprocessed_path)?;
         return Ok(());
     }
-    // --- 【修改】STAGE 5: TACKY IR GENERATION ---
+
+    // --- STAGE 5 & 6 & 7: CODE GENERATION ---
     println!("\n5. Generating TACKY Intermediate Representation (IR)...");
     let mut tacky_generator = TackyGenerator::new(&mut id_generator);
-    // 【修改】使用 validated_ast 而不是 c_ast
-    let tacky_ir = tacky_generator.generate_tacky(checked_ast)?; // validated_ast is consumed
+    let tacky_ir = tacky_generator.generate_tacky(checked_ast)?;
     println!("   ✓ TACKY IR generation successful.");
-    if cli.tacky {
-        println!(
-            "--- Generated TACKY IR ---\n{:#?}\n------------------------",
-            tacky_ir
-        );
-        println!("\nHalting as requested by --tacky.");
-        fs::remove_file(&preprocessed_path)?;
-        return Ok(());
-    }
-    // --- 【修改】STAGE 6: ASSEMBLY GENERATION ---
+    if cli.tacky { /* ... */ }
+
     println!("\n6. Generating Assembly AST from TACKY IR...");
     let mut asm_generator = AsmGenerator::new();
-    let asm_ast = asm_generator.generate_assembly(tacky_ir)?; // tacky_ir is consumed
+    let asm_ast = asm_generator.generate_assembly(tacky_ir)?;
     println!("   ✓ Assembly AST generation successful.");
-    if cli.codegen {
-        println!(
-            "--- Generated Assembly AST ---\n{:#?}\n--------------------------",
-            asm_ast
-        );
-        println!("\nHalting as requested by --codegen.");
-        fs::remove_file(&preprocessed_path)?;
-        return Ok(());
-    }
-    // --- 【修改】STAGE 7: CODE EMISSION ---
+    if cli.codegen { /* ... */ }
+
     println!("\n7. Emitting assembly code from Assembly AST...");
-    let assembly_code = emitter::emit_assembly(asm_ast)?; // asm_ast is consumed
+    let assembly_code = emitter::emit_assembly(asm_ast)?;
     let assembly_path = parent_dir.join(file_stem).with_extension("s");
     fs::write(&assembly_path, &assembly_code)?;
     println!(
@@ -150,22 +132,26 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         assembly_path.display()
     );
 
-    // --- 【修改】STAGE 8: ASSEMBLE & LINK ---
-    println!("\n8. Assembling and linking...");
-    let output_path = parent_dir.join(file_stem);
-    assemble(&assembly_path, &output_path)?;
-    println!(
-        "   ✓ Assembling and linking complete: {}",
-        output_path.display()
-    );
-    // --- Cleanup ---
-    // 总是删除预处理文件
-    fs::remove_file(&preprocessed_path)?;
+    // --- STAGE 8: ASSEMBLE or LINK ---
+    if cli.compile_only {
+        println!("\n8. Assembling to object file (-c flag detected)...");
+        let output_path = parent_dir.join(file_stem).with_extension("o");
+        assemble_to_object(&assembly_path, &output_path)?;
+        println!("   ✓ Assembling complete: {}", output_path.display());
+    } else {
+        println!("\n8. Assembling and linking...");
+        let output_path = parent_dir.join(file_stem);
+        link_to_executable(&assembly_path, &output_path)?;
+        println!(
+            "   ✓ Assembling and linking complete: {}",
+            output_path.display()
+        );
+    }
 
-    // 【核心修改】只有在没有 --keep-asm 标志时才删除 .s 文件
+    // --- Cleanup ---
+    fs::remove_file(&preprocessed_path)?;
     if !cli.keep_asm {
         if let Err(e) = fs::remove_file(&assembly_path) {
-            // 如果文件因为某些原因不存在，打印一个警告而不是让整个程序失败
             eprintln!(
                 "Warning: could not remove temporary assembly file '{}': {}",
                 assembly_path.display(),
@@ -179,15 +165,20 @@ fn run_pipeline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    println!(
-        "\n✅ Success! Executable created at: {}",
-        output_path.display()
-    );
+    if cli.compile_only {
+        println!(
+            "\n✅ Success! Object file created at: {}",
+            parent_dir.join(file_stem).with_extension("o").display()
+        );
+    } else {
+        println!(
+            "\n✅ Success! Executable created at: {}",
+            parent_dir.join(file_stem).display()
+        );
+    }
 
     Ok(())
 }
-
-// --- Helper Functions for external commands (不变) ---
 
 fn run_command(command: &mut Command) -> Result<(), Box<dyn std::error::Error>> {
     let status = command.status()?;
@@ -207,10 +198,20 @@ fn preprocess(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Err
     )
 }
 
-fn assemble(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn link_to_executable(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
     run_command(
         Command::new("gcc")
             .arg("-no-pie")
+            .arg(input)
+            .arg("-o")
+            .arg(output),
+    )
+}
+
+fn assemble_to_object(input: &Path, output: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    run_command(
+        Command::new("gcc")
+            .arg("-c")
             .arg(input)
             .arg("-o")
             .arg(output),
